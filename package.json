@@ -6,6 +6,10 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
+    "start:bg": "nohup node dist/index.js > logs/daemon.log 2>&1 & echo $! > .daemon.pid && echo \"aidevflow daemon started (PID: $(cat .daemon.pid))\"",
+    "stop:bg": "kill $(cat .daemon.pid) 2>/dev/null && rm -f .daemon.pid && echo \"aidevflow daemon stopped\" || (rm -f .daemon.pid && echo \"Process was not running\")",
+    "status:bg": "[ -f .daemon.pid ] && ps -p $(cat .daemon.pid) > /dev/null 2>&1 && echo \"aidevflow daemon is RUNNING (PID: $(cat .daemon.pid))\" || echo \"aidevflow daemon is NOT running\"",
+    "logs": "tail -f logs/aidevflow.jsonl",
     "dev": "tsx watch src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",

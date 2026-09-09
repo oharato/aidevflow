@@ -118,14 +118,64 @@ Backlog で課題を作成する際、「詳細」に対象リポジトリ（単
 >      REQUIRE_AI_TAG=true
 >      ```
 
-### 6. デーモンの起動
+### 6. デーモンの起動方法（フォアグラウンド / バックグラウンド）
+
+開発・デバッグ時の動作確認には **フォアグラウンド起動**、ターミナルを閉じて常駐稼働させるには **バックグラウンド起動** を使い分けることができます。
+
+#### ① フォアグラウンド起動 (動作確認・デバッグ用)
+標準出力を直接ターミナルで確認したい場合に最適です（`Ctrl + C` で停止）：
 
 ```bash
-# 通常起動 (本番: Antigravity CLI: agy を使用)
+# 本番モード (Antigravity CLI: agy)
 pnpm start
 
-# モック起動 (Backlog連携・疎通テスト用)
+# モックモード (Backlog連携テスト用・LLM不使用)
 AGENT_RUNNER=mock pnpm start
+```
+
+#### ② バックグラウンド常駐起動 (通常運用)
+ターミナルを閉じてもバックグラウンドで動き続けるバックグラウンドモードです：
+
+```bash
+# バックグラウンド起動 (PID管理・ログ自動出力)
+pnpm run start:bg
+
+# 稼働ステータス確認
+pnpm run status:bg
+
+# リアルタイムログ監視 (tail -f)
+pnpm run logs
+
+# デーモンの安全停止
+pnpm run stop:bg
+```
+
+#### ③ 本格的な常駐化 (systemd ユーザーサービス)
+OS起動時の自動起動やクラッシュ時の自動再起動を行う場合は、`systemd --user` ユニットファイル（`~/.config/systemd/user/aidevflow.service`）を作成して管理できます：
+
+```ini
+# ~/.config/systemd/user/aidevflow.service
+[Unit]
+Description=aidevflow Backlog AI Agent Daemon
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/oharato/workspace/aidevflow
+ExecStart=/home/oharato/.local/share/mise/shims/node dist/index.js
+Restart=always
+RestartSec=10
+EnvironmentFile=/home/oharato/workspace/aidevflow/.env
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now aidevflow
+systemctl --user status aidevflow
+journalctl --user -u aidevflow -f
 ```
 
 > [!NOTE]

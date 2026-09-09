@@ -6,5 +6,7 @@ dist/
 .pnpm-cache/
 .pnpm-state/
 *.log
+logs/*.log
 logs/*.jsonl
 !logs/.gitkeep
+.daemon.pid
