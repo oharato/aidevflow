@@ -405,7 +405,7 @@ export class AgentDispatcher {
       });
 
       commentLines.push(
-        `### ⚠️ 【人間への確認依頼】自律パイプラインを一時停止しました`,
+        `### [注意] 【人間への確認依頼】自律パイプラインを一時停止しました`,
         ``,
         `以下の理由により自律処理を停止し、ステータスを **「確認待ち」** に変更しました。`,
         ``,
@@ -417,18 +417,18 @@ export class AgentDispatcher {
         ...(newSummary ? [`- **新件名**: \`${newSummary}\``] : []),
         ...prSectionLines,
         ``,
-        `#### 🤖 AI からの質問・論点要約:`,
+        `#### [AI] からの質問・論点要約:`,
         result.output,
         ``,
         `---`,
-        `#### 👤 人間側の対応手順 (再開方法):`,
+        `#### [手順] 人間側の対応手順 (再開方法):`,
         `1. 本チケットに回答コメント（指示・方針）を投稿してください。`,
         `2. ステータスを **「処理中」**（カスタム状態利用時は「詳細設計中」または「実装中」）に変更してください。`,
         `3. デーモンが回答内容を読み取り、カウンターをリセットして自動再開します。`
       );
     } else if (isFinalApproval) {
       commentLines.push(
-        `### 🚀 【レビュー依頼】AIエージェントによる全工程が完了しました`,
+        `### 【レビュー依頼】AIエージェントによる全工程が完了しました`,
         ``,
         `チケット **${issue.issueKey}: ${newSummary || issue.summary}** に対するすべての開発工程（詳細設計 → 設計レビュー → 実装 → 技術レビュー → 要件レビュー）が完了しました。`,
         ``,
@@ -445,8 +445,8 @@ export class AgentDispatcher {
       );
     } else {
       commentLines.push(
-        `### 🤖 aidevflow [${role}] 処理報告`,
-        `**結果**: ${result.success ? "成功" : "失敗"} (${result.isRejection ? "⚠️ 差し戻し" : "✅ 完了/承認"})`,
+        `### [AI] aidevflow [${role}] 処理報告`,
+        `**結果**: ${result.success ? "成功" : "失敗"} (${result.isRejection ? "[差し戻し]" : "[完了/承認]"})`,
         `**ブランチ**: \`${issue.issueKey}\``,
         ...prSectionLines,
         `**所要時間**: ${(durationMs / 1000).toFixed(1)}s`,

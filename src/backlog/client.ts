@@ -6,6 +6,30 @@ import type {
   GetIssuesParams,
 } from "./types.js";
 
+/**
+ * Backlog APIの制約（MySQL utf8/3バイト制限による "Incorrect String" エラー）を回避するため、
+ * 4バイトUTF-8文字（絵文字など）を安全なテキストに置換・除去する
+ */
+export function sanitizeBacklogText(text: string): string {
+  if (!text) return text;
+
+  let sanitized = text
+    .replace(/🤖/g, "[AI]")
+    .replace(/⚠️/g, "[注意]")
+    .replace(/✅/g, "[OK]")
+    .replace(/❌/g, "[NG]")
+    .replace(/🚀/g, "[実行]")
+    .replace(/🔗/g, "[リンク]")
+    .replace(/📁/g, "[フォルダ]")
+    .replace(/📝/g, "[メモ]")
+    .replace(/🔍/g, "[検索]")
+    .replace(/💡/g, "[提案]")
+    .replace(/🎉/g, "[完了]");
+
+  // 残りの4バイトUTF-8文字（サロゲートペア: コードポイント > 0xFFFF）を除去
+  return sanitized.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "");
+}
+
 export class BacklogClient {
   private baseUrl: string;
   private apiKey: string;
@@ -114,13 +138,13 @@ export class BacklogClient {
     const url = `${this.baseUrl}/issues/${encodeURIComponent(issueIdOrKey)}?${this.getAuthQuery()}`;
     const body = new URLSearchParams();
     if (params.summary !== undefined) {
-      body.append("summary", params.summary);
+      body.append("summary", sanitizeBacklogText(params.summary));
     }
     if (params.statusId !== undefined) {
       body.append("statusId", String(params.statusId));
     }
     if (params.comment !== undefined) {
-      body.append("comment", params.comment);
+      body.append("comment", sanitizeBacklogText(params.comment));
     }
 
     const res = await fetch(url, {
@@ -149,7 +173,7 @@ export class BacklogClient {
   async addComment(issueIdOrKey: string, content: string): Promise<BacklogComment> {
     const url = `${this.baseUrl}/issues/${encodeURIComponent(issueIdOrKey)}/comments?${this.getAuthQuery()}`;
     const body = new URLSearchParams();
-    body.append("content", content);
+    body.append("content", sanitizeBacklogText(content));
 
     const res = await fetch(url, {
       method: "POST",

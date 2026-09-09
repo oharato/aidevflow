@@ -25,7 +25,16 @@ export class AgyRunner implements IAgentRunner {
         "--dangerously-skip-permissions",
         "--effort",
         this.effort,
+        "--output-format",
+        "stream-json",
       ];
+
+      const startTime = Date.now();
+      let elapsedSeconds = 0;
+      const heartbeatTimer = setInterval(() => {
+        elapsedSeconds += 10;
+        console.log(`[AgyRunner] ${role} エージェント実行中... (${elapsedSeconds}秒経過 / プロンプト処理・思考中)`);
+      }, 10000);
 
       const child = spawn("agy", args, {
         cwd: this.workDir,
@@ -33,39 +42,75 @@ export class AgyRunner implements IAgentRunner {
         stdio: ["ignore", "pipe", "pipe"],
       });
 
-      let stdout = "";
-      let stderr = "";
+      let rawStdout = "";
+      let rawStderr = "";
+      let finalResponse = "";
+      let lineBuffer = "";
 
       child.stdout.on("data", (data) => {
         const text = data.toString();
-        stdout += text;
-        process.stdout.write(`[agy:${role}] ${text}`);
+        rawStdout += text;
+        lineBuffer += text;
+
+        const lines = lineBuffer.split("\n");
+        lineBuffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (parsed.event === "init") {
+              console.log(`[agy:${role}] セッション開始 (ID: ${parsed.conversation_id})`);
+            } else if (parsed.event === "step_update") {
+              if (parsed.step_update?.text_delta) {
+                process.stdout.write(parsed.step_update.text_delta);
+              }
+              if (parsed.step_update?.tool_calls && Array.isArray(parsed.step_update.tool_calls)) {
+                for (const tc of parsed.step_update.tool_calls) {
+                  console.log(`\n[agy:${role}] ツール実行: ${tc.name || "tool"}`);
+                }
+              }
+            } else if (parsed.event === "result") {
+              if (parsed.result?.response) {
+                finalResponse = parsed.result.response;
+              }
+            }
+          } catch {
+            // JSONでなければそのまま出力
+            process.stdout.write(`\n[agy:${role}] ${trimmed}\n`);
+          }
+        }
       });
 
       child.stderr.on("data", (data) => {
         const text = data.toString();
-        stderr += text;
+        rawStderr += text;
         process.stderr.write(`[agy:ERR] ${text}`);
       });
 
       child.on("close", (code) => {
-        if (code !== 0) {
-          console.error(`[AgyRunner] agy process exited with code ${code}`);
-        }
+        clearInterval(heartbeatTimer);
+        const totalDurationSec = Math.round((Date.now() - startTime) / 1000);
+        console.log(`\n[AgyRunner] ${role} エージェント終了 (終了コード: ${code}, 所要時間: ${totalDurationSec}秒)`);
+
+        const outputText = finalResponse || rawStdout || rawStderr;
         const isRejection =
-          stdout.includes("差し戻し") ||
-          stdout.includes("REJECT") ||
-          stdout.includes("リジェクト");
+          outputText.includes("差し戻し") ||
+          outputText.includes("REJECT") ||
+          outputText.includes("リジェクト");
+
         resolve({
           role,
           success: code === 0,
           summary: `エージェント [${role}] が実行されました (終了コード: ${code})`,
           isRejection,
-          output: stdout || stderr,
+          output: outputText,
         });
       });
 
       child.on("error", (err) => {
+        clearInterval(heartbeatTimer);
         console.error(`[AgyRunner] Failed to spawn agy CLI:`, err);
         reject(err);
       });
