@@ -44,6 +44,10 @@ export interface BacklogIssue {
     id: number;
     name: string;
   };
+  category?: Array<{
+    id: number;
+    name: string;
+  }>;
   summary: string;
   description: string;
   status: BacklogStatus;
@@ -56,6 +60,8 @@ export interface BacklogIssue {
 export interface GetIssuesParams {
   projectId?: number[];
   statusId?: number[];
+  issueTypeId?: number[];
+  categoryId?: number[];
   count?: number;
   order?: "asc" | "desc";
   sort?: "updated" | "created";

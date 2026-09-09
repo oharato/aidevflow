@@ -1,3 +1,4 @@
+import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs";
 import { AgentDispatcher } from "../src/daemon/dispatcher.js";
 import { BacklogPoller } from "../src/daemon/poller.js";
@@ -24,16 +25,8 @@ class MockCustomRunner implements IAgentRunner {
   }
 }
 
-async function runPrefixFallbackTests() {
-  console.log("=== Backlogフリープラン（標準4状態のみ）件名プレフィックスフォールバック 単体テスト開始 ===");
-
+describe("Backlogフリープラン（標準4状態のみ）件名プレフィックスフォールバック", () => {
   const testLogPath = "logs/test-prefix-fallback.jsonl";
-  if (fs.existsSync(testLogPath)) {
-    fs.unlinkSync(testLogPath);
-  }
-  const logger = new JsonlLogger(testLogPath);
-
-  // 標準4状態のみ（カスタム状態なし）
   const standardStatuses: BacklogStatus[] = [
     { id: 1, projectId: 5406, name: "未対応", color: "#ed8077", displayOrder: 1 },
     { id: 2, projectId: 5406, name: "処理中", color: "#4488c5", displayOrder: 2 },
@@ -43,6 +36,16 @@ async function runPrefixFallbackTests() {
 
   let lastUpdatedParams: UpdateIssueParams = {};
   let lastPostedComment = "";
+  let logger: JsonlLogger;
+
+  beforeEach(() => {
+    if (fs.existsSync(testLogPath)) {
+      fs.unlinkSync(testLogPath);
+    }
+    logger = new JsonlLogger(testLogPath);
+    lastUpdatedParams = {};
+    lastPostedComment = "";
+  });
 
   const mockBacklog = {
     getComments: async () => [],
@@ -80,41 +83,13 @@ async function runPrefixFallbackTests() {
     ],
   } as unknown as GitHubService;
 
-  let currentHandler: (role: AgentRole) => AgentResult = () => ({
-    success: true,
-    isRejection: false,
-    summary: "詳細設計完了",
-    output: "API仕様策定完了。次は設計レビューです。",
-  });
-
-  const runner = new MockCustomRunner((role) => currentHandler(role));
-
-  const dispatcher = new AgentDispatcher(
-    mockBacklog,
-    runner,
-    "/mock/payment-service",
-    false,
-    logger,
-    mockWorktreeManager,
-    mockGitHubService,
-    3
-  );
-
-  // 1. 自動判別の検証
-  if (dispatcher.isCustomStatusMode(standardStatuses)) {
-    throw new Error("標準4状態なのにカスタム状態モードと判定されました");
-  }
-  console.log("✓ カスタム状態不可環境（標準4状態のみ）を自動検出し、件名プレフィックスモードにフォールバック");
-
-  // 2. 新規チケット着手テスト (タグなしで「処理中」 -> director 開始 -> [設計レビュー中] に更新)
-  console.log("\nテスト 1: タグなしチケット着手 -> director 完了で [設計レビュー中] に更新");
-  const newIssue: BacklogIssue = {
+  const baseIssue: BacklogIssue = {
     id: 2001,
     projectId: 5406,
     issueKey: "STUDY-5",
     keyId: 5,
     issueType: { id: 1, name: "タスク" },
-    summary: "決済APIリファクタリング", // プレフィックスなし
+    summary: "決済APIリファクタリング",
     description: "リポジトリ: /mock/payment-service\n決済モジュールを修正する",
     status: standardStatuses[1], // 処理中
     createdUser: { id: 1, name: "ユーザー" },
@@ -122,167 +97,170 @@ async function runPrefixFallbackTests() {
     updated: "2026-09-09T00:00:00Z",
   };
 
-  const res1 = await dispatcher.processIssue(newIssue, standardStatuses);
-  if (res1.newSummary !== "[設計レビュー中] 決済APIリファクタリング") {
-    throw new Error(`想定外の新件名: ${res1.newSummary}`);
-  }
-  if (lastUpdatedParams.summary !== "[設計レビュー中] 決済APIリファクタリング") {
-    throw new Error(`Backlog更新の件名が一致しません: ${lastUpdatedParams.summary}`);
-  }
-  if (lastUpdatedParams.statusId !== 2) {
-    throw new Error(`ステータスが「処理中」(2) ではありません: ${lastUpdatedParams.statusId}`);
-  }
-  console.log("  ✓ 件名が [設計レビュー中] 決済APIリファクタリング に自動更新され、ステータスは処理中を維持");
-
-  // 3. 設計レビュー承認 -> [実装中] に更新
-  console.log("\nテスト 2: 設計レビュー (curator) 承認 -> [実装中] に更新");
-  const curatorIssue: BacklogIssue = {
-    ...newIssue,
-    summary: "[設計レビュー中] 決済APIリファクタリング",
-    status: standardStatuses[1], // 処理中
-  };
-
-  currentHandler = () => ({
-    success: true,
-    isRejection: false,
-    summary: "設計LGTM",
-    output: "設計書の内容を承認しました（LGTM）。次は実装です。",
+  it("標準4状態のみの環境でカスタム状態モードがfalseと自動判別されること", () => {
+    const runner = new MockCustomRunner(() => ({ success: true, isRejection: false, summary: "", output: "" }));
+    const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/repo", false, logger, mockWorktreeManager, mockGitHubService, 3);
+    expect(dispatcher.isCustomStatusMode(standardStatuses)).toBe(false);
   });
 
-  const res2 = await dispatcher.processIssue(curatorIssue, standardStatuses);
-  if (res2.newSummary !== "[実装中] 決済APIリファクタリング") {
-    throw new Error(`想定外の新件名: ${res2.newSummary}`);
-  }
-  console.log("  ✓ 件名が [実装中] 決済APIリファクタリング に正常更新！");
+  it("タグなしチケット着手でdirectorが実行され、件名が[設計レビュー中]に自動更新されること", async () => {
+    const runner = new MockCustomRunner(() => ({
+      success: true,
+      isRejection: false,
+      summary: "詳細設計完了",
+      output: "API仕様策定完了。次は設計レビューです。",
+    }));
 
-  // 4. 差し戻し上限到達で [確認待ち] & ステータス「未対応」へエスカレーション
-  console.log("\nテスト 3: レビュー差し戻し3回で [確認待ち] & ステータス「未対応」へエスカレーション");
-  const artistIssue: BacklogIssue = {
-    ...newIssue,
-    summary: "[技術レビュー中] 決済APIリファクタリング",
-    status: standardStatuses[1], // 処理中
-  };
+    const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/payment-service", false, logger, mockWorktreeManager, mockGitHubService, 3);
+    const res = await dispatcher.processIssue(baseIssue, standardStatuses);
 
-  currentHandler = () => ({
-    success: true,
-    isRejection: true,
-    summary: "テスト不足による差し戻し",
-    output: "単体テストのコードカバレッジが不足しています。再修正してください。",
+    expect(res.newSummary).toBe("[設計レビュー中] 決済APIリファクタリング");
+    expect(lastUpdatedParams.summary).toBe("[設計レビュー中] 決済APIリファクタリング");
+    expect(lastUpdatedParams.statusId).toBe(2);
   });
 
-  await dispatcher.processIssue(artistIssue, standardStatuses); // 1回目
-  await dispatcher.processIssue(artistIssue, standardStatuses); // 2回目
-  const resReject3 = await dispatcher.processIssue(artistIssue, standardStatuses); // 3回目 (上限到達)
+  it("設計レビュー承認により件名が[実装中]に正常更新されること", async () => {
+    const curatorIssue: BacklogIssue = {
+      ...baseIssue,
+      summary: "[設計レビュー中] 決済APIリファクタリング",
+      status: standardStatuses[1], // 処理中
+    };
 
-  if (!resReject3.isEscalation) throw new Error("3回目でエスカレーションされていません");
-  if (resReject3.newSummary !== "[確認待ち] 決済APIリファクタリング") {
-    throw new Error(`想定外のエスカレーション件名: ${resReject3.newSummary}`);
-  }
-  if (lastUpdatedParams.statusId !== 1) {
-    throw new Error(`エスカレーション時にステータスが「未対応」(1) になっていません: ${lastUpdatedParams.statusId}`);
-  }
-  console.log("  ✓ 差し戻し上限により [確認待ち] かつステータス「未対応」に自動変更され、人間へ注意喚起！");
+    const runner = new MockCustomRunner(() => ({
+      success: true,
+      isRejection: false,
+      summary: "設計LGTM",
+      output: "設計書の内容を承認しました（LGTM）。次は実装です。",
+    }));
 
-  // 5. 人間が指示を出し、ステータスを「処理中」に戻して再開
-  console.log("\nテスト 4: 人間がコメント投稿＆ステータスを「処理中」に戻して自律再開");
-  const dummyProject: BacklogProject = {
-    id: 5406,
-    projectKey: "STUDY",
-    name: "勉強プロジェクト",
-    chartEnabled: false,
-    subtaskingEnabled: false,
-    projectLeaderCanEditProjectLeader: false,
-    useWiki: false,
-    useFileSharing: false,
-    useWikiTreeView: false,
-    archived: false,
-  };
+    const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/payment-service", false, logger, mockWorktreeManager, mockGitHubService, 3);
+    const res = await dispatcher.processIssue(curatorIssue, standardStatuses);
 
-  // チケットは現在「未対応」で「[確認待ち] 決済APIリファクタリング」
-  let currentIssueState: BacklogIssue = {
-    ...newIssue,
-    summary: "[確認待ち] 決済APIリファクタリング",
-    status: standardStatuses[0], // 未対応
-  };
-
-  const pollerBacklog = {
-    getProject: async () => dummyProject,
-    getProjectStatuses: async () => standardStatuses,
-    getIssues: async () => [currentIssueState],
-    getComments: async () => [{ createdUser: { name: "ユーザー" }, content: "カバレッジ基準を80%に緩和して進めてください。" }],
-    addComment: async (_k: string, c: string) => {
-      lastPostedComment = c;
-      return { id: 1 };
-    },
-    updateIssue: async (_k: string, p: UpdateIssueParams) => {
-      lastUpdatedParams = { ...p };
-      return { id: 1 };
-    },
-  } as unknown as BacklogClient;
-
-  const poller = new BacklogPoller(pollerBacklog, dispatcher, "STUDY", undefined, 1, logger);
-  await poller.init();
-
-  // 1回目ポーリング: [確認待ち] かつ 未対応 なので非アクション。キャッシュに保存される。
-  await poller.pollOnce();
-
-  // 人間が回答し、ステータスを「処理中」に変更した！件名を [実装中] に戻す
-  currentIssueState = {
-    ...newIssue,
-    summary: "[実装中] 決済APIリファクタリング",
-    status: standardStatuses[1], // 処理中
-  };
-
-  // エージェントは指示に従って実装完了し、技術レビューへ
-  currentHandler = () => ({
-    success: true,
-    isRejection: false,
-    summary: "実装完了",
-    output: "カバレッジ80%で実装完了しました。次は技術レビューです。",
+    expect(res.newSummary).toBe("[実装中] 決済APIリファクタリング");
+    expect(lastUpdatedParams.summary).toBe("[実装中] 決済APIリファクタリング");
+    expect(lastUpdatedParams.statusId).toBe(2);
   });
 
-  // 2回目ポーリング: 復帰検知 & カウンターリセット & ディスパッチ
-  await poller.pollOnce();
+  it("差し戻し3回で[確認待ち]かつステータスが未対応へエスカレーションされること", async () => {
+    const criticIssue: BacklogIssue = {
+      ...baseIssue,
+      summary: "[技術レビュー中] 決済APIリファクタリング",
+      status: standardStatuses[1], // 処理中
+    };
 
-  if (dispatcher.getRejectionCount("STUDY-5") !== 0) {
-    throw new Error(`カウンターがリセットされていません: ${dispatcher.getRejectionCount("STUDY-5")}`);
-  }
-  if (lastUpdatedParams.summary !== "[技術レビュー中] 決済APIリファクタリング") {
-    throw new Error(`新フェーズ [技術レビュー中] に更新されていません: ${lastUpdatedParams.summary}`);
-  }
-  console.log("  ✓ 人間による「確認待ち」解除を検知し、カウンターをリセットして [技術レビュー中] へ正常再開！");
+    const runner = new MockCustomRunner(() => ({
+      success: true,
+      isRejection: true,
+      summary: "テスト不足",
+      output: "単体テストのカバレッジ不足。",
+    }));
 
-  // 6. 最終フェーズ (Editor 承認) -> [要件レビュー完了] & ステータス「処理済み」
-  console.log("\nテスト 5: 最終フェーズ (Editor 承認) -> [要件レビュー完了] & ステータス「処理済み」");
-  const editorIssue: BacklogIssue = {
-    ...newIssue,
-    summary: "[要件レビュー中] 決済APIリファクタリング",
-    status: standardStatuses[1], // 処理中
-  };
+    const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/payment-service", false, logger, mockWorktreeManager, mockGitHubService, 3);
 
-  currentHandler = () => ({
-    success: true,
-    isRejection: false,
-    summary: "全要件充足",
-    output: "すべての要件を満たしていることを確認しました。全工程完了です。",
+    await dispatcher.processIssue(criticIssue, standardStatuses); // 1回目
+    await dispatcher.processIssue(criticIssue, standardStatuses); // 2回目
+    const resReject3 = await dispatcher.processIssue(criticIssue, standardStatuses); // 3回目 (上限到達)
+
+    expect(resReject3.isEscalation).toBe(true);
+    expect(resReject3.newSummary).toBe("[確認待ち] 決済APIリファクタリング");
+    expect(lastUpdatedParams.summary).toBe("[確認待ち] 決済APIリファクタリング");
+    expect(lastUpdatedParams.statusId).toBe(1); // 未対応
   });
 
-  const resEditor = await dispatcher.processIssue(editorIssue, standardStatuses);
-  if (resEditor.newSummary !== "[要件レビュー完了] 決済APIリファクタリング") {
-    throw new Error(`最終件名が不正です: ${resEditor.newSummary}`);
-  }
-  if (lastUpdatedParams.statusId !== 3) {
-    throw new Error(`ステータスが「処理済み」(3) に更新されていません: ${lastUpdatedParams.statusId}`);
-  }
-  if (!lastPostedComment.includes("【レビュー依頼】AIエージェントによる全工程が完了しました")) {
-    throw new Error("レビュー依頼コメントが含まれていません");
-  }
-  console.log("  ✓ Editor 承認により件名が [要件レビュー完了]、ステータスが「処理済み」(3) に更新！PRレビュー依頼コメント投稿成功！");
+  it("人間による「確認待ち」解除を検知し、カウンターをリセットして正常に再開されること", async () => {
+    const runner = new MockCustomRunner(() => ({
+      success: true,
+      isRejection: true,
+      summary: "指摘",
+      output: "指摘",
+    }));
 
-  console.log("\n全件名プレフィックスフォールバック単体テストに合格しました！");
-}
+    const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/payment-service", false, logger, mockWorktreeManager, mockGitHubService, 3);
 
-runPrefixFallbackTests().catch((err) => {
-  console.error("テスト失敗:", err);
-  process.exit(1);
+    // 上限到達
+    await dispatcher.processIssue({ ...baseIssue, summary: "[技術レビュー中] 決済APIリファクタリング" }, standardStatuses);
+    await dispatcher.processIssue({ ...baseIssue, summary: "[技術レビュー中] 決済APIリファクタリング" }, standardStatuses);
+    await dispatcher.processIssue({ ...baseIssue, summary: "[技術レビュー中] 決済APIリファクタリング" }, standardStatuses);
+    expect(dispatcher.getRejectionCount("STUDY-5")).toBe(3);
+
+    let currentIssueState: BacklogIssue = {
+      ...baseIssue,
+      summary: "[確認待ち] 決済APIリファクタリング",
+      status: standardStatuses[0], // 未対応
+    };
+
+    const dummyProject: BacklogProject = {
+      id: 5406,
+      projectKey: "STUDY",
+      name: "勉強プロジェクト",
+      chartEnabled: false,
+      subtaskingEnabled: false,
+      projectLeaderCanEditProjectLeader: false,
+      useWiki: false,
+      useFileSharing: false,
+      useWikiTreeView: false,
+      archived: false,
+    };
+
+    const pollerBacklog = {
+      getProject: async () => dummyProject,
+      getProjectStatuses: async () => standardStatuses,
+      getIssues: async () => [currentIssueState],
+      getComments: async () => [{ createdUser: { name: "ユーザー" }, content: "カバレッジ基準を緩和します。" }],
+      addComment: async (_k: string, c: string) => {
+        lastPostedComment = c;
+        return { id: 1 };
+      },
+      updateIssue: async (_k: string, p: UpdateIssueParams) => {
+        lastUpdatedParams = { ...p };
+        return { id: 1 };
+      },
+    } as unknown as BacklogClient;
+
+    const poller = new BacklogPoller(pollerBacklog, dispatcher, "STUDY", undefined, 1, logger);
+    await poller.init();
+    await poller.pollOnce();
+
+    // 人間が「[実装中]」にしてステータスを「処理中」に変更
+    currentIssueState = {
+      ...baseIssue,
+      summary: "[実装中] 決済APIリファクタリング",
+      status: standardStatuses[1], // 処理中
+    };
+
+    runner.setHandler(() => ({
+      success: true,
+      isRejection: false,
+      summary: "実装完了",
+      output: "カバレッジ対応完了。次は技術レビューです。",
+    }));
+
+    await poller.pollOnce();
+
+    expect(dispatcher.getRejectionCount("STUDY-5")).toBe(0);
+    expect(lastUpdatedParams.summary).toBe("[技術レビュー中] 決済APIリファクタリング");
+  });
+
+  it("Editor承認時に[要件レビュー完了]かつステータスが処理済み(3)に更新されること", async () => {
+    const editorIssue: BacklogIssue = {
+      ...baseIssue,
+      summary: "[要件レビュー中] 決済APIリファクタリング",
+      status: standardStatuses[1], // 処理中
+    };
+
+    const runner = new MockCustomRunner(() => ({
+      success: true,
+      isRejection: false,
+      summary: "全要件充足",
+      output: "すべての要件を満たしていることを確認しました。全工程完了です。",
+    }));
+
+    const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/payment-service", false, logger, mockWorktreeManager, mockGitHubService, 3);
+    const res = await dispatcher.processIssue(editorIssue, standardStatuses);
+
+    expect(res.newSummary).toBe("[要件レビュー完了] 決済APIリファクタリング");
+    expect(lastUpdatedParams.summary).toBe("[要件レビュー完了] 決済APIリファクタリング");
+    expect(lastUpdatedParams.statusId).toBe(3); // 処理済み
+    expect(lastPostedComment).toContain("【レビュー依頼】AIエージェントによる全工程が完了しました");
+  });
 });

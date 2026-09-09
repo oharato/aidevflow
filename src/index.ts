@@ -60,7 +60,12 @@ async function main() {
     config.backlogProjectKey,
     config.backlogIssueKey,
     config.pollIntervalSec,
-    logger
+    logger,
+    {
+      targetIssueType: config.targetIssueType,
+      targetCategory: config.targetCategory,
+      requireAiTag: config.requireAiTag,
+    }
   );
 
   const handleShutdown = () => {

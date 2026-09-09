@@ -5,18 +5,17 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "start": "tsx src/index.ts",
+    "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
-    "test": "tsx test/repo-parser.test.ts && tsx test/worktree.test.ts && tsx test/github.test.ts && tsx test/dispatcher.test.ts && tsx test/poller.test.ts && tsx test/loop-prevention.test.ts && tsx test/prefix-fallback.test.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "setup:statuses": "tsx src/scripts/setup-statuses.ts"
   },
   "packageManager": "pnpm@11.22.0",
-  "dependencies": {
-    "dotenv": "17.4.2"
-  },
   "devDependencies": {
     "@types/node": "24.13.3",
     "tsx": "4.23.13",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "vitest": "4.1.11"
   }
 }

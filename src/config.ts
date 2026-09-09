@@ -1,8 +1,14 @@
-import dotenv from "dotenv";
 import path from "path";
 import os from "os";
 
-dotenv.config();
+// Node.js LTS (v24+) 組み込みの環境変数ファイル読み込み
+if (typeof process.loadEnvFile === "function") {
+  try {
+    process.loadEnvFile();
+  } catch {
+    // .env が存在しない場合は環境変数をそのまま利用
+  }
+}
 
 export interface AppConfig {
   backlogSpaceId: string;
@@ -19,6 +25,9 @@ export interface AppConfig {
   maxRejectionCount: number;
   agyEffort?: "low" | "medium" | "high";
   logFilePath: string;
+  targetIssueType?: string;
+  targetCategory?: string;
+  requireAiTag?: boolean;
 }
 
 export function loadConfig(): AppConfig {
@@ -36,6 +45,9 @@ export function loadConfig(): AppConfig {
   const maxRejectionCount = Number(process.env.MAX_REJECTION_COUNT) || 3;
   const agyEffort = (process.env.AGY_EFFORT || "medium") as AppConfig["agyEffort"];
   const logFilePath = process.env.LOG_FILE_PATH || "logs/aidevflow.jsonl";
+  const targetIssueType = process.env.TARGET_ISSUE_TYPE || undefined;
+  const targetCategory = process.env.TARGET_CATEGORY || undefined;
+  const requireAiTag = process.env.REQUIRE_AI_TAG === "true";
 
   return {
     backlogSpaceId: spaceId,
@@ -52,5 +64,8 @@ export function loadConfig(): AppConfig {
     maxRejectionCount,
     agyEffort,
     logFilePath,
+    targetIssueType,
+    targetCategory,
+    requireAiTag,
   };
 }

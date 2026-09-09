@@ -1,3 +1,4 @@
+import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs";
 import { AgentDispatcher } from "../src/daemon/dispatcher.js";
 import { BacklogPoller } from "../src/daemon/poller.js";
@@ -24,15 +25,8 @@ class MockCustomRunner implements IAgentRunner {
   }
 }
 
-async function runLoopPreventionTests() {
-  console.log("=== 差し戻し無限ループ防止 & 人間確認エスカレーション 単体テスト開始 ===");
-
+describe("差し戻し無限ループ防止 & 人間確認エスカレーション", () => {
   const testLogPath = "logs/test-loop-prevention.jsonl";
-  if (fs.existsSync(testLogPath)) {
-    fs.unlinkSync(testLogPath);
-  }
-  const logger = new JsonlLogger(testLogPath);
-
   const dummyStatuses: BacklogStatus[] = [
     { id: 1, projectId: 100, name: "未対応", color: "#ed8077", displayOrder: 1 },
     { id: 2, projectId: 100, name: "詳細設計中", color: "#3b9dbd", displayOrder: 2 },
@@ -46,11 +40,26 @@ async function runLoopPreventionTests() {
 
   let lastUpdatedStatusId: number | null = null;
   let lastPostedComment = "";
+  let logger: JsonlLogger;
+
+  beforeEach(() => {
+    if (fs.existsSync(testLogPath)) {
+      fs.unlinkSync(testLogPath);
+    }
+    logger = new JsonlLogger(testLogPath);
+    lastUpdatedStatusId = null;
+    lastPostedComment = "";
+  });
 
   const mockBacklog = {
     getComments: async () => [],
     addComment: async (_key: string, comment: string) => {
       lastPostedComment = comment;
+      return { id: 1 };
+    },
+    updateIssue: async (_key: string, params: { statusId?: number; comment?: string }) => {
+      if (params.statusId !== undefined) lastUpdatedStatusId = params.statusId;
+      if (params.comment) lastPostedComment = params.comment;
       return { id: 1 };
     },
     updateIssueStatus: async (_key: string, statusId: number, comment?: string) => {
@@ -63,41 +72,18 @@ async function runLoopPreventionTests() {
   const mockWorktreeManager = {
     getWorktreesDir: () => "/mock/worktrees",
     ensureWorktrees: async (repoPaths: string[], issueKey: string) => {
-      return repoPaths.map((p) => {
-        const rawName = p.split("/").pop() || "repo";
-        const repoName = rawName.replace(/\.git$/i, "");
-        return {
-          repoName,
-          repoPath: p,
-          worktreeDir: `/mock/worktrees/${issueKey}/${repoName}`,
-          branch: issueKey,
-        };
-      });
+      return repoPaths.map((p) => ({
+        repoName: "payment-service",
+        repoPath: p,
+        worktreeDir: `/mock/worktrees/${issueKey}/payment-service`,
+        branch: issueKey,
+      }));
     },
   } as unknown as GitWorktreeManager;
 
   const mockGitHubService = {
     ensurePullRequests: async () => [],
   } as unknown as GitHubService;
-
-  const runner = new MockCustomRunner(() => ({
-    success: true,
-    isRejection: true,
-    summary: "レビュー指摘による差し戻し",
-    output: "テストコードの網羅性が不足しています。修正してください。",
-  }));
-
-  const maxRejections = 3;
-  const dispatcher = new AgentDispatcher(
-    mockBacklog,
-    runner,
-    "/mock/repo",
-    false,
-    logger,
-    mockWorktreeManager,
-    mockGitHubService,
-    maxRejections
-  );
 
   const baseIssue: BacklogIssue = {
     id: 1001,
@@ -113,170 +99,190 @@ async function runLoopPreventionTests() {
     updated: "2026-09-09T00:00:00Z",
   };
 
-  // ----------------------------------------------------
-  // テスト 1: 差し戻しカウントの追跡と上限到達での「確認待ち」エスカレーション
-  // ----------------------------------------------------
-  console.log("テスト 1: 3回差し戻しで「確認待ち」へエスカレーションされることの検証");
+  it("3回差し戻しで「確認待ち」へエスカレーションされること", async () => {
+    const runner = new MockCustomRunner(() => ({
+      success: true,
+      isRejection: true,
+      summary: "レビュー指摘による差し戻し",
+      output: "テストコードの網羅性が不足しています。修正してください。",
+    }));
 
-  // 1回目差し戻し (critic -> 実装中)
-  let res1 = await dispatcher.processIssue(baseIssue, dummyStatuses);
-  if (res1.isEscalation) throw new Error("1回目の差し戻しでエスカレーションされてはいけません");
-  if (res1.nextStatusTarget !== "実装") throw new Error(`想定外の遷移先: ${res1.nextStatusTarget}`);
-  if (dispatcher.getRejectionCount("STUDY-3") !== 1) throw new Error("差し戻しカウントが1ではありません");
-  console.log("  ✓ 1回目の差し戻し: 実装中へ遷移 (カウント: 1)");
+    const dispatcher = new AgentDispatcher(
+      mockBacklog,
+      runner,
+      "/mock/repo",
+      false,
+      logger,
+      mockWorktreeManager,
+      mockGitHubService,
+      3
+    );
 
-  // 2回目差し戻し (critic -> 実装中)
-  let res2 = await dispatcher.processIssue(baseIssue, dummyStatuses);
-  if (res2.isEscalation) throw new Error("2回目の差し戻しでエスカレーションされてはいけません");
-  if (dispatcher.getRejectionCount("STUDY-3") !== 2) throw new Error("差し戻しカウントが2ではありません");
-  console.log("  ✓ 2回目の差し戻し: 実装中へ遷移 (カウント: 2)");
+    // 1回目
+    const res1 = await dispatcher.processIssue(baseIssue, dummyStatuses);
+    expect(res1.isEscalation).toBeFalsy();
+    expect(res1.nextStatusTarget).toBe("実装");
+    expect(dispatcher.getRejectionCount("STUDY-3")).toBe(1);
 
-  // 3回目差し戻し (上限到達 -> 確認待ち)
-  let res3 = await dispatcher.processIssue(baseIssue, dummyStatuses);
-  if (!res3.isEscalation) throw new Error("3回目の差し戻しでエスカレーションされるべきです");
-  if (res3.nextStatusTarget !== "確認待ち") throw new Error(`想定外の遷移先: ${res3.nextStatusTarget}`);
-  if (lastUpdatedStatusId !== 7) throw new Error(`ステータスIDが「確認待ち」(7) に更新されていません: ${lastUpdatedStatusId}`);
-  if (!lastPostedComment.includes("【人間への確認依頼】自律パイプラインを一時停止しました")) {
-    throw new Error("エスカレーションコメントが含まれていません");
-  }
-  if (!lastPostedComment.includes("差し戻し上限（3回）に達しました")) {
-    throw new Error("上限到達の理由がコメントに含まれていません");
-  }
-  console.log("  ✓ 3回目の差し戻し: 上限到達により「確認待ち」へ正常にエスカレーション！");
+    // 2回目
+    const res2 = await dispatcher.processIssue(baseIssue, dummyStatuses);
+    expect(res2.isEscalation).toBeFalsy();
+    expect(dispatcher.getRejectionCount("STUDY-3")).toBe(2);
 
-  // ----------------------------------------------------
-  // テスト 2: エージェント明示要求（CONFIRM_HUMAN / 【人間への確認依頼】）の即時エスカレーション
-  // ----------------------------------------------------
-  console.log("\nテスト 2: エージェントからの明示的な確認要請で即時エスカレーション");
-  dispatcher.resetRejectionCount("STUDY-3"); // リセット
+    // 3回目 (上限到達)
+    const res3 = await dispatcher.processIssue(baseIssue, dummyStatuses);
+    expect(res3.isEscalation).toBe(true);
+    expect(res3.nextStatusTarget).toBe("確認待ち");
+    expect(lastUpdatedStatusId).toBe(7);
+    expect(lastPostedComment).toContain("【人間への確認依頼】自律パイプラインを一時停止しました");
+    expect(lastPostedComment).toContain("差し戻し上限（3回）に達しました");
+  });
 
-  runner.setHandler(() => ({
-    success: true,
-    isRejection: false,
-    summary: "仕様の曖昧さを検出",
-    output: "外部決済ゲートウェイのタイムアウト時のリトライ仕様が未定義です。【人間への確認依頼】どちらの挙動を採用すべきか指示をお願いします。",
-  }));
+  it("エージェントからの明示的な確認要請で即時エスカレーションされること", async () => {
+    const runner = new MockCustomRunner(() => ({
+      success: true,
+      isRejection: false,
+      summary: "仕様の曖昧さを検出",
+      output: "外部決済ゲートウェイのリトライ仕様が未定義です。【人間への確認依頼】指示をお願いします。",
+    }));
 
-  const designIssue: BacklogIssue = {
-    ...baseIssue,
-    status: dummyStatuses[1], // 詳細設計中 (director)
-  };
+    const dispatcher = new AgentDispatcher(
+      mockBacklog,
+      runner,
+      "/mock/repo",
+      false,
+      logger,
+      mockWorktreeManager,
+      mockGitHubService,
+      3
+    );
 
-  let resExplicit = await dispatcher.processIssue(designIssue, dummyStatuses);
-  if (!resExplicit.isEscalation) throw new Error("明示要求時にエスカレーションされるべきです");
-  if (resExplicit.nextStatusTarget !== "確認待ち") throw new Error("確認待ちに遷移していません");
-  if (!lastPostedComment.includes("エージェントから人間への確認要請がありました")) {
-    throw new Error("確認要請の理由がコメントに含まれていません");
-  }
-  console.log("  ✓ エージェントの確認依頼タグを検知し即座に「確認待ち」へ遷移！");
+    const designIssue: BacklogIssue = {
+      ...baseIssue,
+      status: dummyStatuses[1], // 詳細設計中 (director)
+    };
 
-  // ----------------------------------------------------
-  // テスト 3: 承認（LGTM）による差し戻しカウンターのリセット
-  // ----------------------------------------------------
-  console.log("\nテスト 3: レビュー承認（LGTM）による差し戻しカウンターリセット");
-  // 意図的に差し戻しカウントを増やす
-  runner.setHandler(() => ({ success: true, isRejection: true, summary: "指摘", output: "指摘" }));
-  await dispatcher.processIssue(baseIssue, dummyStatuses);
-  if (dispatcher.getRejectionCount("STUDY-3") !== 1) throw new Error("差し戻しカウント加算失敗");
+    const res = await dispatcher.processIssue(designIssue, dummyStatuses);
+    expect(res.isEscalation).toBe(true);
+    expect(res.nextStatusTarget).toBe("確認待ち");
+    expect(lastPostedComment).toContain("エージェントから人間への確認要請がありました");
+  });
 
-  // 承認（LGTM）
-  runner.setHandler(() => ({ success: true, isRejection: false, summary: "LGTM", output: "技術観点LGTM" }));
-  let resApprove = await dispatcher.processIssue(baseIssue, dummyStatuses);
-  if (resApprove.isEscalation) throw new Error("承認時にエスカレーションされてはいけません");
-  if (dispatcher.getRejectionCount("STUDY-3") !== 0) {
-    throw new Error(`承認後にカウンターがリセットされていません: ${dispatcher.getRejectionCount("STUDY-3")}`);
-  }
-  console.log("  ✓ レビュー承認により差し戻しカウンターが正常にリセットされました！");
+  it("レビュー承認（LGTM）により差し戻しカウンターがリセットされること", async () => {
+    const runner = new MockCustomRunner(() => ({
+      success: true,
+      isRejection: true,
+      summary: "指摘",
+      output: "指摘",
+    }));
 
-  // ----------------------------------------------------
-  // テスト 4: 人間が「確認待ち」から戻した際の Poller でのカウンターリセットと再開
-  // ----------------------------------------------------
-  console.log("\nテスト 4: 人間による「確認待ち」からの復帰と Poller での自動リセット・再開");
+    const dispatcher = new AgentDispatcher(
+      mockBacklog,
+      runner,
+      "/mock/repo",
+      false,
+      logger,
+      mockWorktreeManager,
+      mockGitHubService,
+      3
+    );
 
-  // 1) 再度上限まで差し戻して「確認待ち」状態にする
-  runner.setHandler(() => ({ success: true, isRejection: true, summary: "差し戻し", output: "指摘" }));
-  await dispatcher.processIssue(baseIssue, dummyStatuses);
-  await dispatcher.processIssue(baseIssue, dummyStatuses);
-  await dispatcher.processIssue(baseIssue, dummyStatuses);
-  if (dispatcher.getRejectionCount("STUDY-3") !== 3) throw new Error("差し戻しカウントが3になっていません");
+    await dispatcher.processIssue(baseIssue, dummyStatuses);
+    expect(dispatcher.getRejectionCount("STUDY-3")).toBe(1);
 
-  // 2) Poller を使ってシミュレーション
-  const dummyProject: BacklogProject = {
-    id: 100,
-    projectKey: "STUDY",
-    name: "AI検証プロジェクト",
-    chartEnabled: false,
-    subtaskingEnabled: false,
-    projectLeaderCanEditProjectLeader: false,
-    useWiki: false,
-    useFileSharing: false,
-    useWikiTreeView: false,
-    archived: false,
-  };
+    // 承認 (LGTM)
+    runner.setHandler(() => ({ success: true, isRejection: false, summary: "LGTM", output: "技術観点LGTM" }));
+    const resApprove = await dispatcher.processIssue(baseIssue, dummyStatuses);
+    expect(resApprove.isEscalation).toBeFalsy();
+    expect(dispatcher.getRejectionCount("STUDY-3")).toBe(0);
+  });
 
-  // チケット一覧（最初は「確認待ち」になっている）
-  let currentIssueState: BacklogIssue = {
-    ...baseIssue,
-    status: dummyStatuses[6], // 確認待ち
-  };
+  it("人間による「確認待ち」解除を検知し、カウンターをリセットして自動再開すること", async () => {
+    const runner = new MockCustomRunner(() => ({
+      success: true,
+      isRejection: true,
+      summary: "指摘",
+      output: "指摘",
+    }));
 
-  const pollerBacklog = {
-    getProject: async () => dummyProject,
-    getProjectStatuses: async () => dummyStatuses,
-    getIssues: async () => [currentIssueState],
-    getComments: async () => [
-      { createdUser: { name: "管理者" }, content: "リトライは指数バックオフで最大3回としてください。" },
-    ],
-    addComment: async (_key: string, comment: string) => {
-      lastPostedComment = comment;
-      return { id: 1 };
-    },
-    updateIssueStatus: async (_key: string, statusId: number, comment?: string) => {
-      lastUpdatedStatusId = statusId;
-      if (comment) lastPostedComment = comment;
-      return { id: 1 };
-    },
-  } as unknown as BacklogClient;
+    const dispatcher = new AgentDispatcher(
+      mockBacklog,
+      runner,
+      "/mock/repo",
+      false,
+      logger,
+      mockWorktreeManager,
+      mockGitHubService,
+      3
+    );
 
-  const poller = new BacklogPoller(pollerBacklog, dispatcher, "STUDY", undefined, 1, logger);
-  await poller.init();
+    // 3回差し戻しで上限到達
+    await dispatcher.processIssue(baseIssue, dummyStatuses);
+    await dispatcher.processIssue(baseIssue, dummyStatuses);
+    await dispatcher.processIssue(baseIssue, dummyStatuses);
+    expect(dispatcher.getRejectionCount("STUDY-3")).toBe(3);
 
-  // 1回目のポーリング: チケットは「確認待ち」（非アクション）。ステータスキャッシュに「確認待ち」が保存される。
-  await poller.pollOnce();
+    // Poller による検知
+    const dummyProject: BacklogProject = {
+      id: 100,
+      projectKey: "STUDY",
+      name: "AI検証プロジェクト",
+      chartEnabled: false,
+      subtaskingEnabled: false,
+      projectLeaderCanEditProjectLeader: false,
+      useWiki: false,
+      useFileSharing: false,
+      useWikiTreeView: false,
+      archived: false,
+    };
 
-  // 人間が回答し、ステータスを「実装中」に変更した！
-  currentIssueState = {
-    ...baseIssue,
-    status: dummyStatuses[3], // 実装中 (artist)
-  };
+    let currentIssueState: BacklogIssue = {
+      ...baseIssue,
+      status: dummyStatuses[6], // 確認待ち
+    };
 
-  // エージェントは人間の指示に従い実装完了（LGTM）
-  runner.setHandler(() => ({
-    success: true,
-    isRejection: false,
-    summary: "指示に従い実装完了",
-    output: "人間の指示に従い指数バックオフのリトライを実装しました。次は技術レビューです。",
-  }));
+    const pollerBacklog = {
+      getProject: async () => dummyProject,
+      getProjectStatuses: async () => dummyStatuses,
+      getIssues: async () => [currentIssueState],
+      getComments: async () => [{ createdUser: { name: "管理者" }, content: "リトライは最大3回としてください。" }],
+      addComment: async (_key: string, comment: string) => {
+        lastPostedComment = comment;
+        return { id: 1 };
+      },
+      updateIssue: async (_key: string, params: { statusId?: number; comment?: string }) => {
+        if (params.statusId !== undefined) lastUpdatedStatusId = params.statusId;
+        return { id: 1 };
+      },
+      updateIssueStatus: async (_key: string, statusId: number) => {
+        lastUpdatedStatusId = statusId;
+        return { id: 1 };
+      },
+    } as unknown as BacklogClient;
 
-  // 2回目のポーリング: 「確認待ち」からの復帰を検知してカウンターリセット & 実行
-  await poller.pollOnce();
+    const poller = new BacklogPoller(pollerBacklog, dispatcher, "STUDY", undefined, 1, logger);
+    await poller.init();
+    await poller.pollOnce();
 
-  if (dispatcher.getRejectionCount("STUDY-3") !== 0) {
-    throw new Error(`人間復帰後に差し戻しカウンターがリセットされていません: ${dispatcher.getRejectionCount("STUDY-3")}`);
-  }
-  console.log("  ✓ 人間による「確認待ち」解除を検知し、カウンターをリセットして正常に再開されました！");
+    // 人間が「実装中」に変更
+    currentIssueState = {
+      ...baseIssue,
+      status: dummyStatuses[3], // 実装中 (artist)
+    };
 
-  // ログファイルに human_escalation イベントが記録されているか確認
-  const logContent = fs.readFileSync(testLogPath, "utf8");
-  if (!logContent.includes("human_escalation")) {
-    throw new Error("ログファイルに human_escalation イベントが記録されていません");
-  }
-  console.log("  ✓ JSONL ログに human_escalation イベントが正しく記録されました！");
+    runner.setHandler(() => ({
+      success: true,
+      isRejection: false,
+      summary: "実装完了",
+      output: "指示に従い実装完了。次は技術レビューです。",
+    }));
 
-  console.log("\n全ループ防止・人間エスカレーション単体テストに成功しました！");
-}
+    await poller.pollOnce();
 
-runLoopPreventionTests().catch((err) => {
-  console.error("テスト失敗:", err);
-  process.exit(1);
+    expect(dispatcher.getRejectionCount("STUDY-3")).toBe(0);
+
+    // ログ確認
+    const logContent = fs.readFileSync(testLogPath, "utf8");
+    expect(logContent).toContain("human_escalation");
+  });
 });

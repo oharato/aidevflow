@@ -3,6 +3,12 @@ import type { AgentDispatcher } from "./dispatcher.js";
 import type { BacklogStatus, BacklogIssue } from "../backlog/types.js";
 import type { JsonlLogger } from "../logger/jsonl.js";
 
+export interface PollerFilterOptions {
+  targetIssueType?: string;
+  targetCategory?: string;
+  requireAiTag?: boolean;
+}
+
 export class BacklogPoller {
   private backlog: BacklogClient;
   private dispatcher: AgentDispatcher;
@@ -15,6 +21,7 @@ export class BacklogPoller {
   private projectStatuses: BacklogStatus[] = [];
   private issueStatusCache: Map<string, string> = new Map();
   private logger?: JsonlLogger;
+  private filterOptions?: PollerFilterOptions;
 
   constructor(
     backlog: BacklogClient,
@@ -22,7 +29,8 @@ export class BacklogPoller {
     projectKey: string,
     targetIssueKey?: string,
     intervalSec: number = 10,
-    logger?: JsonlLogger
+    logger?: JsonlLogger,
+    filterOptions?: PollerFilterOptions
   ) {
     this.backlog = backlog;
     this.dispatcher = dispatcher;
@@ -30,6 +38,7 @@ export class BacklogPoller {
     this.targetIssueKey = targetIssueKey;
     this.intervalMs = intervalSec * 1000;
     this.logger = logger;
+    this.filterOptions = filterOptions;
   }
 
   async init(): Promise<void> {
@@ -48,6 +57,16 @@ export class BacklogPoller {
       console.log(`[Poller] 動作モード: 【カスタム状態モード】（詳細設計中 / 実装中 等を使用）`);
     } else {
       console.log(`[Poller] 動作モード: 【件名プレフィックスモード】（標準4状態 ＋ [詳細設計中] 等の件名タグを使用）`);
+    }
+
+    if (this.filterOptions?.targetIssueType) {
+      console.log(`[Poller] フィルタ: 種別="${this.filterOptions.targetIssueType}" のみ対象`);
+    }
+    if (this.filterOptions?.targetCategory) {
+      console.log(`[Poller] フィルタ: カテゴリー="${this.filterOptions.targetCategory}" のみ対象`);
+    }
+    if (this.filterOptions?.requireAiTag) {
+      console.log(`[Poller] フィルタ: 件名 [AI] タグ必須`);
     }
   }
 
@@ -116,6 +135,31 @@ export class BacklogPoller {
       const isCustom = this.dispatcher.isCustomStatusMode(this.projectStatuses);
 
       const actionableIssues = issuesToScan.filter((issue) => {
+        // 1. 種別 (Issue Type) フィルター
+        if (this.filterOptions?.targetIssueType) {
+          if (issue.issueType.name !== this.filterOptions.targetIssueType) {
+            return false;
+          }
+        }
+
+        // 2. カテゴリー (Category) フィルター
+        if (this.filterOptions?.targetCategory) {
+          const hasMatchingCategory = issue.category?.some(
+            (c) => c.name === this.filterOptions!.targetCategory
+          );
+          if (!hasMatchingCategory) {
+            return false;
+          }
+        }
+
+        // 3. 件名 [AI] タグ必須フィルター
+        if (this.filterOptions?.requireAiTag) {
+          const hasTag = /\[AI\]/i.test(issue.summary);
+          if (!hasTag) {
+            return false;
+          }
+        }
+
         const role = this.dispatcher.resolveRole(issue, this.projectStatuses);
         return role !== null;
       });
