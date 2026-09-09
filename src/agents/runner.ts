@@ -8,15 +8,21 @@ import { buildAgentPrompt } from "./prompts.js";
 export class AgyRunner implements IAgentRunner {
   private workDir: string;
   private effort: "low" | "medium" | "high";
+  private timeout: string;
 
-  constructor(workDir: string = process.cwd(), effort: "low" | "medium" | "high" = "medium") {
+  constructor(
+    workDir: string = process.cwd(),
+    effort: "low" | "medium" | "high" = "medium",
+    timeout: string = "20m"
+  ) {
     this.workDir = workDir;
     this.effort = effort;
+    this.timeout = timeout;
   }
 
   async run(role: AgentRole, context: AgentContext): Promise<AgentResult> {
     const prompt = buildAgentPrompt(role, context);
-    console.log(`[AgyRunner] Spawning Antigravity CLI (agy) for role: ${role}...`);
+    console.log(`[AgyRunner] Spawning Antigravity CLI (agy) for role: ${role}... (timeout: ${this.timeout})`);
 
     return new Promise<AgentResult>((resolve, reject) => {
       const args = [
@@ -25,6 +31,8 @@ export class AgyRunner implements IAgentRunner {
         "--dangerously-skip-permissions",
         "--effort",
         this.effort,
+        "--print-timeout",
+        this.timeout,
         "--output-format",
         "stream-json",
       ];
@@ -42,14 +50,14 @@ export class AgyRunner implements IAgentRunner {
         stdio: ["ignore", "pipe", "pipe"],
       });
 
-      let rawStdout = "";
       let rawStderr = "";
+      let accumulatedText = "";
       let finalResponse = "";
       let lineBuffer = "";
+      let lastToolCall = "";
 
       child.stdout.on("data", (data) => {
         const text = data.toString();
-        rawStdout += text;
         lineBuffer += text;
 
         const lines = lineBuffer.split("\n");
@@ -64,11 +72,13 @@ export class AgyRunner implements IAgentRunner {
               console.log(`[agy:${role}] セッション開始 (ID: ${parsed.conversation_id})`);
             } else if (parsed.event === "step_update") {
               if (parsed.step_update?.text_delta) {
+                accumulatedText += parsed.step_update.text_delta;
                 process.stdout.write(parsed.step_update.text_delta);
               }
               if (parsed.step_update?.tool_calls && Array.isArray(parsed.step_update.tool_calls)) {
                 for (const tc of parsed.step_update.tool_calls) {
-                  console.log(`\n[agy:${role}] ツール実行: ${tc.name || "tool"}`);
+                  lastToolCall = tc.name || "tool";
+                  console.log(`\n[agy:${role}] ツール実行: ${lastToolCall}`);
                 }
               }
             } else if (parsed.event === "result") {
@@ -77,7 +87,8 @@ export class AgyRunner implements IAgentRunner {
               }
             }
           } catch {
-            // JSONでなければそのまま出力
+            // JSONでない平文の場合のみ蓄積・出力
+            accumulatedText += trimmed + "\n";
             process.stdout.write(`\n[agy:${role}] ${trimmed}\n`);
           }
         }
@@ -94,7 +105,22 @@ export class AgyRunner implements IAgentRunner {
         const totalDurationSec = Math.round((Date.now() - startTime) / 1000);
         console.log(`\n[AgyRunner] ${role} エージェント終了 (終了コード: ${code}, 所要時間: ${totalDurationSec}秒)`);
 
-        const outputText = finalResponse || rawStdout || rawStderr;
+        // 生の NDJSON (rawStdout) は絶対に含めず、エージェントが発言したテキストのみを取り出す
+        let outputText = (finalResponse || accumulatedText).trim();
+
+        if (!outputText) {
+          if (code !== 0) {
+            outputText = `[エラー] エージェント [${role}] が異常終了またはタイムアウトしました (終了コード: ${code})。\n直前のツール実行: ${lastToolCall || "なし"}\n${rawStderr ? `エラー詳細:\n${rawStderr.slice(0, 1000)}` : ""}`.trim();
+          } else {
+            outputText = `エージェント [${role}] の処理が完了しました。`;
+          }
+        }
+
+        // コメント長が長すぎる場合のトリム (Backlog上限・可読性対策: 最大7000文字)
+        if (outputText.length > 7000) {
+          outputText = outputText.slice(0, 7000) + "\n\n...[長文のため以降省略]...";
+        }
+
         const isRejection =
           outputText.includes("差し戻し") ||
           outputText.includes("REJECT") ||

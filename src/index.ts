@@ -37,7 +37,7 @@ async function main() {
   } else if (config.agentRunner === "claude") {
     runner = new ClaudeCliRunner(config.agentWorkDir);
   } else {
-    runner = new AgyRunner(config.agentWorkDir, config.agyEffort || "medium");
+    runner = new AgyRunner(config.agentWorkDir, config.agyEffort || "medium", config.agentTimeout);
   }
 
   const worktreeManager = new GitWorktreeManager(config.aidevflowHome);

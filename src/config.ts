@@ -28,6 +28,7 @@ export interface AppConfig {
   targetIssueType?: string;
   targetCategory?: string;
   requireAiTag?: boolean;
+  agentTimeout: string;
 }
 
 export function loadConfig(): AppConfig {
@@ -67,5 +68,6 @@ export function loadConfig(): AppConfig {
     targetIssueType,
     targetCategory,
     requireAiTag,
+    agentTimeout: process.env.AGENT_TIMEOUT || "20m",
   };
 }
