@@ -107,16 +107,20 @@ export class BacklogClient {
     return (await res.json()) as BacklogStatus;
   }
 
-  async updateIssueStatus(
+  async updateIssue(
     issueIdOrKey: string,
-    statusId: number,
-    comment?: string
+    params: import("./types.js").UpdateIssueParams
   ): Promise<BacklogIssue> {
     const url = `${this.baseUrl}/issues/${encodeURIComponent(issueIdOrKey)}?${this.getAuthQuery()}`;
     const body = new URLSearchParams();
-    body.append("statusId", String(statusId));
-    if (comment) {
-      body.append("comment", comment);
+    if (params.summary !== undefined) {
+      body.append("summary", params.summary);
+    }
+    if (params.statusId !== undefined) {
+      body.append("statusId", String(params.statusId));
+    }
+    if (params.comment !== undefined) {
+      body.append("comment", params.comment);
     }
 
     const res = await fetch(url, {
@@ -132,6 +136,14 @@ export class BacklogClient {
       throw new Error(`Backlog API Error [${res.status}] PATCH /issues/${issueIdOrKey}: ${errText}`);
     }
     return (await res.json()) as BacklogIssue;
+  }
+
+  async updateIssueStatus(
+    issueIdOrKey: string,
+    statusId: number,
+    comment?: string
+  ): Promise<BacklogIssue> {
+    return this.updateIssue(issueIdOrKey, { statusId, comment });
   }
 
   async addComment(issueIdOrKey: string, content: string): Promise<BacklogComment> {

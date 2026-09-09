@@ -60,3 +60,10 @@ export interface GetIssuesParams {
   order?: "asc" | "desc";
   sort?: "updated" | "created";
 }
+
+export interface UpdateIssueParams {
+  summary?: string;
+  statusId?: number;
+  comment?: string;
+}
+

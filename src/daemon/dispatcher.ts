@@ -6,12 +6,20 @@ import type { JsonlLogger } from "../logger/jsonl.js";
 import { extractRepositoryPaths } from "../git/repo-parser.js";
 import { GitWorktreeManager, type WorktreeTarget } from "../git/worktree.js";
 import { GitHubService, type PullRequestResult } from "../git/github.js";
+import {
+  hasCustomStatuses,
+  parsePhaseFromSummary,
+  formatSummaryWithPhase,
+  getNextPhaseTag,
+  PHASE_TAGS,
+} from "../backlog/prefix-helper.js";
 
 export interface ProcessIssueResult {
   handled: boolean;
   nextStatusTarget?: string;
   isEscalation?: boolean;
   rejectionCount?: number;
+  newSummary?: string;
 }
 
 export class AgentDispatcher {
@@ -24,6 +32,7 @@ export class AgentDispatcher {
   private githubService: GitHubService;
   private maxRejectionCount: number;
   private rejectionCounts: Map<string, number> = new Map();
+  private customStatusModeOverride?: boolean;
 
   constructor(
     backlog: BacklogClient,
@@ -33,7 +42,8 @@ export class AgentDispatcher {
     logger?: JsonlLogger,
     worktreeManager?: GitWorktreeManager,
     githubService?: GitHubService,
-    maxRejectionCount: number = 3
+    maxRejectionCount: number = 3,
+    customStatusModeOverride?: boolean
   ) {
     this.backlog = backlog;
     this.runner = runner;
@@ -43,6 +53,18 @@ export class AgentDispatcher {
     this.worktreeManager = worktreeManager || new GitWorktreeManager();
     this.githubService = githubService || new GitHubService();
     this.maxRejectionCount = maxRejectionCount;
+    this.customStatusModeOverride = customStatusModeOverride;
+  }
+
+  setCustomStatusMode(enabled?: boolean): void {
+    this.customStatusModeOverride = enabled;
+  }
+
+  isCustomStatusMode(projectStatuses: BacklogStatus[]): boolean {
+    if (this.customStatusModeOverride !== undefined) {
+      return this.customStatusModeOverride;
+    }
+    return hasCustomStatuses(projectStatuses);
   }
 
   getRejectionCount(issueKey: string): number {
@@ -51,6 +73,44 @@ export class AgentDispatcher {
 
   resetRejectionCount(issueKey: string): void {
     this.rejectionCounts.delete(issueKey);
+  }
+
+  resolveRole(issue: BacklogIssue, projectStatuses: BacklogStatus[]): AgentRole | null {
+    if (this.isCustomStatusMode(projectStatuses)) {
+      return this.resolveRoleFromStatus(issue.status.name);
+    }
+    return this.resolveRoleFromSummary(issue);
+  }
+
+  resolveRoleFromSummary(issue: BacklogIssue): AgentRole | null {
+    const statusName = issue.status.name;
+    // プレフィックスモードでは「処理中」または「未対応」を対象とする
+    if (!statusName.includes("処理中") && !statusName.includes("未対応")) {
+      return null;
+    }
+
+    const parsed = parsePhaseFromSummary(issue.summary);
+
+    // [確認待ち] タグが付いている場合は人間待ち
+    if (parsed.isWaitingConfirmation) {
+      return null;
+    }
+
+    // [要件レビュー完了] の場合は完了済み
+    if (parsed.isCompleted) {
+      return null;
+    }
+
+    if (parsed.role) {
+      return parsed.role;
+    }
+
+    // タグがなく「処理中」になっている場合は初期ロール director (詳細設計)
+    if (statusName.includes("処理中")) {
+      return "director";
+    }
+
+    return null;
   }
 
   resolveRoleFromStatus(statusName: string): AgentRole | null {
@@ -124,7 +184,7 @@ export class AgentDispatcher {
 
   async processIssue(issue: BacklogIssue, projectStatuses: BacklogStatus[]): Promise<ProcessIssueResult> {
     const statusName = issue.status.name;
-    const role = this.resolveRoleFromStatus(statusName);
+    const role = this.resolveRole(issue, projectStatuses);
 
     if (!role) {
       return { handled: false };
@@ -278,18 +338,44 @@ export class AgentDispatcher {
         : "エージェントから人間への確認要請がありました";
     }
 
-    // 次ステータスの決定
+    // 次ステータスおよび件名の決定
     let nextStatusTarget: string;
-    if (isEscalation) {
-      nextStatusTarget = "確認待ち";
+    let newSummary: string | undefined;
+    let nextStatusId: number | null = null;
+    const isFinalApproval = role === "editor" && !result.isRejection && !isEscalation;
+    const isCustom = this.isCustomStatusMode(projectStatuses);
+
+    if (isCustom) {
+      // 1. カスタム状態モード (上位プラン等)
+      if (isEscalation) {
+        nextStatusTarget = "確認待ち";
+      } else {
+        nextStatusTarget = this.getNextStatusName(role, result.isRejection ?? false);
+      }
+      nextStatusId = this.findStatusIdByName(projectStatuses, nextStatusTarget);
     } else {
-      nextStatusTarget = this.getNextStatusName(role, result.isRejection ?? false);
+      // 2. 件名プレフィックス ＋ 標準ステータスモード (フリープラン等)
+      if (isEscalation) {
+        const nextPhaseTag = PHASE_TAGS.confirmHuman;
+        newSummary = formatSummaryWithPhase(issue.summary, nextPhaseTag);
+        nextStatusTarget = `[${nextPhaseTag}]`;
+        // 人間に気付かせるため標準ステータス「未対応」へ
+        nextStatusId = this.findStatusIdByName(projectStatuses, "未対応") || 1;
+      } else {
+        const nextPhaseTag = getNextPhaseTag(role, result.isRejection ?? false);
+        newSummary = formatSummaryWithPhase(issue.summary, nextPhaseTag);
+        nextStatusTarget = `[${nextPhaseTag}]`;
+        if (isFinalApproval) {
+          // 全工程完了時は人間レビュー待ちのため「処理済み」へ
+          nextStatusId = this.findStatusIdByName(projectStatuses, "処理済み") || 3;
+        } else {
+          // AIリレー中は「処理中」を維持
+          nextStatusId = this.findStatusIdByName(projectStatuses, "処理中") || 2;
+        }
+      }
     }
 
-    const nextStatusId = this.findStatusIdByName(projectStatuses, nextStatusTarget);
-
     // 6. Backlog コメント文面の構築
-    const isFinalApproval = role === "editor" && !result.isRejection && !isEscalation;
     const commentLines: string[] = [];
 
     // PR リンク一覧の整形
@@ -314,6 +400,7 @@ export class AgentDispatcher {
           maxRejectionCount: this.maxRejectionCount,
           executionWorkDir,
           repos: worktreeTargets.map((t) => t.repoName),
+          newSummary,
         },
       });
 
@@ -327,6 +414,7 @@ export class AgentDispatcher {
         `- **差し戻し回数**: ${currentRejectionCount} / ${this.maxRejectionCount}`,
         `- **対象リポジトリ**: ${worktreeTargets.map((t) => t.repoName).join(", ")}`,
         `- **作業 Worktree**: \`${executionWorkDir}\``,
+        ...(newSummary ? [`- **新件名**: \`${newSummary}\``] : []),
         ...prSectionLines,
         ``,
         `#### 🤖 AI からの質問・論点要約:`,
@@ -335,14 +423,14 @@ export class AgentDispatcher {
         `---`,
         `#### 👤 人間側の対応手順 (再開方法):`,
         `1. 本チケットに回答コメント（指示・方針）を投稿してください。`,
-        `2. ステータスを **「詳細設計中」** または **「実装中」** に変更してください。`,
+        `2. ステータスを **「処理中」**（カスタム状態利用時は「詳細設計中」または「実装中」）に変更してください。`,
         `3. デーモンが回答内容を読み取り、カウンターをリセットして自動再開します。`
       );
     } else if (isFinalApproval) {
       commentLines.push(
         `### 🚀 【レビュー依頼】AIエージェントによる全工程が完了しました`,
         ``,
-        `チケット **${issue.issueKey}: ${issue.summary}** に対するすべての開発工程（詳細設計 → 設計レビュー → 実装 → 技術レビュー → 要件レビュー）が完了しました。`,
+        `チケット **${issue.issueKey}: ${newSummary || issue.summary}** に対するすべての開発工程（詳細設計 → 設計レビュー → 実装 → 技術レビュー → 要件レビュー）が完了しました。`,
         ``,
         `以下のプルリクエストをご確認の上、レビュー・マージをお願いいたします。`,
         ``,
@@ -350,6 +438,7 @@ export class AgentDispatcher {
         `- **ブランチ**: \`${issue.issueKey}\``,
         `- **作業 Worktree**: \`${executionWorkDir}\``,
         `- **ステータス**: ${nextStatusTarget}`,
+        ...(newSummary ? [`- **新件名**: \`${newSummary}\``] : []),
         ``,
         `#### 最終要件レビュー報告:`,
         result.output
@@ -362,6 +451,7 @@ export class AgentDispatcher {
         ...prSectionLines,
         `**所要時間**: ${(durationMs / 1000).toFixed(1)}s`,
         `**次の想定フェーズ**: ${nextStatusTarget}`,
+        ...(newSummary ? [`- **新件名**: \`${newSummary}\``] : []),
         ``,
         `#### 実行ログ・成果物要約:`,
         result.output
@@ -371,42 +461,76 @@ export class AgentDispatcher {
     const commentBody = commentLines.filter(Boolean).join("\n");
 
     if (this.dryRun) {
-      console.log(`[DRY_RUN] Backlog更新をスキップしました (次ステータス: ${nextStatusTarget}, statusId: ${nextStatusId})`);
+      console.log(`[DRY_RUN] Backlog更新をスキップしました (次ステータス: ${nextStatusTarget}, statusId: ${nextStatusId}, newSummary: ${newSummary || "なし"})`);
       console.log(`[DRY_RUN] コメント内容:\n`, commentBody);
       return {
         handled: true,
         nextStatusTarget,
         isEscalation,
         rejectionCount: currentRejectionCount,
+        newSummary,
       };
     }
 
     // 7. Backlog 課題更新 & コメント投稿
     try {
-      if (nextStatusId && nextStatusId !== issue.status.id) {
-        console.log(`[Dispatcher] Backlog ステータス更新中: ${issue.status.name} -> ${nextStatusTarget} (id=${nextStatusId})`);
-        await this.backlog.updateIssueStatus(issue.issueKey, nextStatusId, commentBody);
-        console.log(`[Dispatcher] ステータス更新 & コメント投稿完了!`);
+      if (isCustom) {
+        if (nextStatusId && nextStatusId !== issue.status.id) {
+          console.log(`[Dispatcher] Backlog ステータス更新中: ${issue.status.name} -> ${nextStatusTarget} (id=${nextStatusId})`);
+          if (typeof this.backlog.updateIssue === "function") {
+            await this.backlog.updateIssue(issue.issueKey, { statusId: nextStatusId, comment: commentBody });
+          } else {
+            await this.backlog.updateIssueStatus(issue.issueKey, nextStatusId, commentBody);
+          }
+          console.log(`[Dispatcher] ステータス更新 & コメント投稿完了!`);
 
-        this.logger?.info("status_updated", `ステータス更新: ${issue.status.name} -> ${nextStatusTarget}`, {
+          this.logger?.info("status_updated", `ステータス更新: ${issue.status.name} -> ${nextStatusTarget}`, {
+            issueKey: issue.issueKey,
+            role,
+            data: {
+              previousStatus: issue.status.name,
+              nextStatus: nextStatusTarget,
+              nextStatusId,
+              prs: prResults,
+            },
+          });
+        } else {
+          console.log(`[Dispatcher] 該当するステータスIDが見つからないか同一のため、コメントのみ投稿します。`);
+          await this.backlog.addComment(issue.issueKey, commentBody);
+          console.log(`[Dispatcher] コメント投稿完了!`);
+
+          this.logger?.info("comment_posted", `コメント投稿完了`, {
+            issueKey: issue.issueKey,
+            role,
+            data: { prs: prResults },
+          });
+        }
+      } else {
+        // 件名プレフィックスモード
+        console.log(`[Dispatcher] Backlog 更新中 (件名プレフィックスモード): 件名="${newSummary}", ステータスID=${nextStatusId}`);
+        if (typeof this.backlog.updateIssue === "function") {
+          await this.backlog.updateIssue(issue.issueKey, {
+            summary: newSummary,
+            statusId: nextStatusId || undefined,
+            comment: commentBody,
+          });
+        } else if (nextStatusId) {
+          await this.backlog.updateIssueStatus(issue.issueKey, nextStatusId, commentBody);
+        } else {
+          await this.backlog.addComment(issue.issueKey, commentBody);
+        }
+        console.log(`[Dispatcher] 件名・ステータス更新 & コメント投稿完了!`);
+
+        this.logger?.info("status_updated", `件名・ステータス更新: ${issue.summary} -> ${newSummary} (statusId=${nextStatusId})`, {
           issueKey: issue.issueKey,
           role,
           data: {
+            previousSummary: issue.summary,
+            newSummary,
             previousStatus: issue.status.name,
-            nextStatus: nextStatusTarget,
             nextStatusId,
             prs: prResults,
           },
-        });
-      } else {
-        console.log(`[Dispatcher] 該当するステータスIDが見つからないか同一のため、コメントのみ投稿します。`);
-        await this.backlog.addComment(issue.issueKey, commentBody);
-        console.log(`[Dispatcher] コメント投稿完了!`);
-
-        this.logger?.info("comment_posted", `コメント投稿完了`, {
-          issueKey: issue.issueKey,
-          role,
-          data: { prs: prResults },
         });
       }
     } catch (err: any) {
@@ -423,6 +547,7 @@ export class AgentDispatcher {
       nextStatusTarget,
       isEscalation,
       rejectionCount: currentRejectionCount,
+      newSummary,
     };
   }
 }

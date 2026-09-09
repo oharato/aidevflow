@@ -7,7 +7,7 @@
     "build": "tsc",
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
-    "test": "tsx test/repo-parser.test.ts && tsx test/worktree.test.ts && tsx test/github.test.ts && tsx test/dispatcher.test.ts && tsx test/poller.test.ts && tsx test/loop-prevention.test.ts",
+    "test": "tsx test/repo-parser.test.ts && tsx test/worktree.test.ts && tsx test/github.test.ts && tsx test/dispatcher.test.ts && tsx test/poller.test.ts && tsx test/loop-prevention.test.ts && tsx test/prefix-fallback.test.ts",
     "setup:statuses": "tsx src/scripts/setup-statuses.ts"
   },
   "packageManager": "pnpm@11.22.0",

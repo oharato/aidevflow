@@ -42,6 +42,13 @@ export class BacklogPoller {
     this.projectStatuses.forEach((st) => {
       console.log(`  - [ID: ${st.id}] "${st.name}" (色: ${st.color})`);
     });
+
+    const isCustom = this.dispatcher.isCustomStatusMode(this.projectStatuses);
+    if (isCustom) {
+      console.log(`[Poller] 動作モード: 【カスタム状態モード】（詳細設計中 / 実装中 等を使用）`);
+    } else {
+      console.log(`[Poller] 動作モード: 【件名プレフィックスモード】（標準4状態 ＋ [詳細設計中] 等の件名タグを使用）`);
+    }
   }
 
   async start(): Promise<void> {
@@ -106,16 +113,21 @@ export class BacklogPoller {
         });
       }
 
+      const isCustom = this.dispatcher.isCustomStatusMode(this.projectStatuses);
+
       const actionableIssues = issuesToScan.filter((issue) => {
-        const role = this.dispatcher.resolveRoleFromStatus(issue.status.name);
+        const role = this.dispatcher.resolveRole(issue, this.projectStatuses);
         return role !== null;
       });
 
-      // 非アクション対象チケットも含め、現在のステータスをキャッシュに追跡（「確認待ち」等）
+      // 非アクション対象チケットも含め、現在のステータス/件名をキャッシュに追跡（「確認待ち」等）
       for (const issue of issuesToScan) {
         const isActionable = actionableIssues.some((ai) => ai.issueKey === issue.issueKey);
         if (!isActionable) {
-          this.issueStatusCache.set(issue.issueKey, issue.status.name);
+          const fingerprint = isCustom
+            ? issue.status.name
+            : `${issue.status.name}::${issue.summary}`;
+          this.issueStatusCache.set(issue.issueKey, fingerprint);
         }
       }
 
@@ -127,28 +139,37 @@ export class BacklogPoller {
       console.log(`\n[Poller] 処理対象のチケットを検知しました: ${actionableIssues.length}件`);
 
       for (const issue of actionableIssues) {
-        const lastStatus = this.issueStatusCache.get(issue.issueKey);
-        const currentStatus = issue.status.name;
+        const lastFingerprint = this.issueStatusCache.get(issue.issueKey);
+        const currentFingerprint = isCustom
+          ? issue.status.name
+          : `${issue.status.name}::${issue.summary}`;
 
-        if (lastStatus === currentStatus) {
+        if (lastFingerprint === currentFingerprint) {
           continue;
         }
 
-        // 人間介入後の再開検知: 「確認待ち」からのステータス変更時、差し戻しカウンターをリセット
-        if (lastStatus && lastStatus.includes("確認待ち")) {
+        // 人間介入後の再開検知: 「確認待ち」からの復帰時、差し戻しカウンターをリセット
+        const wasWaitingConfirmation =
+          lastFingerprint &&
+          (lastFingerprint.includes("確認待ち") || lastFingerprint.includes("confirmHuman"));
+
+        if (wasWaitingConfirmation) {
           console.log(`[Poller] 「確認待ち」からの復帰を検知しました。差し戻しカウンターをリセットします: ${issue.issueKey}`);
           this.dispatcher.resetRejectionCount(issue.issueKey);
           this.logger?.info("issue_detected", `人間確認後の自律再開を検知 (カウンターリセット): ${issue.issueKey}`, {
             issueKey: issue.issueKey,
-            data: { previousStatus: lastStatus, currentStatus },
+            data: { previous: lastFingerprint, current: currentFingerprint },
           });
         }
 
-        console.log(`[Poller] チケット処理開始: ${issue.issueKey} (ステータス: "${currentStatus}")`);
+        console.log(`[Poller] チケット処理開始: ${issue.issueKey} [${issue.summary}] (ステータス: "${issue.status.name}")`);
         const result = await this.dispatcher.processIssue(issue, this.projectStatuses);
 
         if (result.handled) {
-          this.issueStatusCache.set(issue.issueKey, result.nextStatusTarget || currentStatus);
+          const nextFingerprint = isCustom
+            ? (result.nextStatusTarget || issue.status.name)
+            : `${result.nextStatusTarget || issue.status.name}::${result.newSummary || issue.summary}`;
+          this.issueStatusCache.set(issue.issueKey, nextFingerprint);
         }
       }
     } finally {
