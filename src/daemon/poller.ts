@@ -169,8 +169,8 @@ export class BacklogPoller {
         const isActionable = actionableIssues.some((ai) => ai.issueKey === issue.issueKey);
         if (!isActionable) {
           const fingerprint = isCustom
-            ? issue.status.name
-            : `${issue.status.name}::${issue.summary}`;
+            ? `${issue.status.name}::none::${issue.updated || ""}`
+            : `${issue.status.name}::${issue.summary}::none::${issue.updated || ""}`;
           this.issueStatusCache.set(issue.issueKey, fingerprint);
         }
       }
@@ -183,10 +183,11 @@ export class BacklogPoller {
       console.log(`\n[Poller] 処理対象のチケットを検知しました: ${actionableIssues.length}件`);
 
       for (const issue of actionableIssues) {
+        const role = this.dispatcher.resolveRole(issue, this.projectStatuses);
         const lastFingerprint = this.issueStatusCache.get(issue.issueKey);
         const currentFingerprint = isCustom
-          ? issue.status.name
-          : `${issue.status.name}::${issue.summary}`;
+          ? `${issue.status.name}::${role || "none"}::${issue.updated || ""}`
+          : `${issue.status.name}::${issue.summary}::${role || "none"}::${issue.updated || ""}`;
 
         if (lastFingerprint === currentFingerprint) {
           continue;
@@ -211,8 +212,8 @@ export class BacklogPoller {
 
         if (result.handled) {
           const nextFingerprint = isCustom
-            ? (result.nextStatusTarget || issue.status.name)
-            : `${result.nextStatusTarget || issue.status.name}::${result.newSummary || issue.summary}`;
+            ? `${result.nextStatusTarget || issue.status.name}::${role || "none"}`
+            : `${result.nextStatusTarget || issue.status.name}::${result.newSummary || issue.summary}::${role || "none"}`;
           this.issueStatusCache.set(issue.issueKey, nextFingerprint);
         }
       }

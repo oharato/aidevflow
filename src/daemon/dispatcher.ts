@@ -32,6 +32,7 @@ export class AgentDispatcher {
   private githubService: GitHubService;
   private maxRejectionCount: number;
   private rejectionCounts: Map<string, number> = new Map();
+  private lastRoleMap: Map<string, AgentRole> = new Map();
   private customStatusModeOverride?: boolean;
 
   constructor(
@@ -91,9 +92,15 @@ export class AgentDispatcher {
 
     const parsed = parsePhaseFromSummary(issue.summary);
 
-    // [確認待ち] タグが付いている場合は人間待ち
+    // [確認待ち] タグが付いている場合:
     if (parsed.isWaitingConfirmation) {
-      return null;
+      // 人間確認待ちの間（未対応）はスキップ
+      if (statusName.includes("未対応")) {
+        return null;
+      }
+      // 人間が回答してステータスを「処理中」に変更した場合は再開
+      // 直前のロールがあればそれを再開ロールとし、なければデフォルト "director"
+      return this.lastRoleMap.get(issue.issueKey) || "director";
     }
 
     // [要件レビュー完了] の場合は完了済み
@@ -390,6 +397,13 @@ export class AgentDispatcher {
     }
 
     if (isEscalation) {
+      const resumeRole: AgentRole =
+        role === "curator"
+          ? "director"
+          : role === "critic" || role === "editor"
+          ? "artist"
+          : role;
+      this.lastRoleMap.set(issue.issueKey, resumeRole);
       console.warn(`[Dispatcher] ⚠️ 人間への確認依頼（エスカレーション）を検知: ${escalationReason}`);
       this.logger?.warn("human_escalation", `人間への確認依頼: ${issue.issueKey} (${escalationReason})`, {
         issueKey: issue.issueKey,

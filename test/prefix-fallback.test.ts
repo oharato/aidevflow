@@ -221,10 +221,10 @@ describe("Backlogフリープラン（標準4状態のみ）件名プレフィ�
     await poller.init();
     await poller.pollOnce();
 
-    // 人間が「[実装中]」にしてステータスを「処理中」に変更
+    // 人間が件名を「[確認待ち]」のまま、ステータスのみ「処理中」に変更して再開を指示
     currentIssueState = {
       ...baseIssue,
-      summary: "[実装中] 決済APIリファクタリング",
+      summary: "[確認待ち] 決済APIリファクタリング",
       status: standardStatuses[1], // 処理中
     };
 
