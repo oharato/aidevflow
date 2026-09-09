@@ -1,0 +1,22 @@
+export type AgentRole = "director" | "curator" | "artist" | "critic" | "editor";
+
+export interface AgentContext {
+  issueKey: string;
+  issueSummary: string;
+  issueDescription: string;
+  recentComments: string[];
+  workDir: string;
+}
+
+export interface AgentResult {
+  role: AgentRole;
+  success: boolean;
+  summary: string;
+  nextStatusName?: string;
+  isRejection?: boolean;
+  output: string;
+}
+
+export interface IAgentRunner {
+  run(role: AgentRole, context: AgentContext): Promise<AgentResult>;
+}

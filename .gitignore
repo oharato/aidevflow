@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+.env.local
+.pnpm-store/
+.pnpm-cache/
+.pnpm-state/
+*.log
+logs/*.jsonl
+!logs/.gitkeep
