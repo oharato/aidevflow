@@ -50,6 +50,18 @@ export class AgyRunner implements IAgentRunner {
         stdio: ["ignore", "pipe", "pipe"],
       });
 
+      // デーモン終了・停止時に agy 子プロセスを確実に道連れ終了させる安全ハンドラ
+      const cleanupChild = () => {
+        if (!child.killed) {
+          try {
+            child.kill("SIGTERM");
+          } catch {}
+        }
+      };
+      process.once("SIGINT", cleanupChild);
+      process.once("SIGTERM", cleanupChild);
+      process.once("exit", cleanupChild);
+
       let rawStderr = "";
       let accumulatedText = "";
       let finalResponse = "";
@@ -102,6 +114,9 @@ export class AgyRunner implements IAgentRunner {
 
       child.on("close", (code) => {
         clearInterval(heartbeatTimer);
+        process.off("SIGINT", cleanupChild);
+        process.off("SIGTERM", cleanupChild);
+        process.off("exit", cleanupChild);
         const totalDurationSec = Math.round((Date.now() - startTime) / 1000);
         console.log(`\n[AgyRunner] ${role} エージェント終了 (終了コード: ${code}, 所要時間: ${totalDurationSec}秒)`);
 
