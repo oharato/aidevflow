@@ -251,7 +251,16 @@ export class AgentDispatcher {
     try {
       if (typeof this.backlog.getComments === "function") {
         const comments = await this.backlog.getComments(issue.issueKey, 5);
-        recentComments = comments.map((c) => `[${c.createdUser.name}]: ${c.content}`);
+        recentComments = comments.map((c) => {
+          let text = (c.content || "").trim();
+          // 生の NDJSON ログなどノイズ文字列が混入している場合の防御
+          if (text.includes('{"event":') || text.includes('"step_update":')) {
+            text = "[システムログのため省略]";
+          } else if (text.length > 1500) {
+            text = text.slice(0, 1500) + "\n...[長文のため一部省略]...";
+          }
+          return `[${c.createdUser.name}]: ${text}`;
+        });
       }
     } catch (e) {
       console.warn(`[Dispatcher] コメント取得スキップ:`, e);

@@ -1,6 +1,15 @@
 import type { AgentRole, AgentContext } from "./types.js";
 
 export function buildAgentPrompt(role: AgentRole, context: AgentContext): string {
+  let commentsText =
+    context.recentComments.length > 0
+      ? context.recentComments.join("\n---\n")
+      : "(コメントなし)";
+
+  if (commentsText.length > 6000) {
+    commentsText = commentsText.slice(0, 6000) + "\n...[長文のため以降省略]...";
+  }
+
   const baseHeader = `
 === タスク情報 ===
 課題キー: ${context.issueKey}
@@ -9,7 +18,7 @@ export function buildAgentPrompt(role: AgentRole, context: AgentContext): string
 ${context.issueDescription}
 
 === 直近の経緯・コメント ===
-${context.recentComments.length > 0 ? context.recentComments.join("\n---\n") : "(コメントなし)"}
+${commentsText}
 ==================
 `.trim();
 
