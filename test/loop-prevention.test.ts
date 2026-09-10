@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs";
-import { AgentDispatcher } from "../src/daemon/dispatcher.js";
+import { AgentDispatcher, hasHumanEscalationRequest } from "../src/daemon/dispatcher.js";
+import { checkIsRejection } from "../src/agents/runner.js";
 import { BacklogPoller } from "../src/daemon/poller.js";
 import { JsonlLogger } from "../src/logger/jsonl.js";
 import type { IAgentRunner, AgentRole, AgentResult } from "../src/agents/types.js";
@@ -284,5 +285,53 @@ describe("差し戻し無限ループ防止 & 人間確認エスカレーショ�
     // ログ確認
     const logContent = fs.readFileSync(testLogPath, "utf8");
     expect(logContent).toContain("human_escalation");
+  });
+
+  it("「CONFIRM_HUMANもございません」や「【人間への確認依頼】はありません」等の否定文脈ではエスカレーションされないこと", async () => {
+    // 1. hasHumanEscalationRequest の単体検証
+    expect(hasHumanEscalationRequest("本課題の要件定義に基づく全機能が完全に実装され、人間の判断を要するエスカレーション事項（CONFIRM_HUMAN）もございません。")).toBe(false);
+    expect(hasHumanEscalationRequest("【人間への確認依頼】はありません。全工程完了です。")).toBe(false);
+    expect(hasHumanEscalationRequest("CONFIRM_HUMAN: なし")).toBe(false);
+    expect(hasHumanEscalationRequest("【人間への確認依頼】: 不要")).toBe(false);
+    expect(hasHumanEscalationRequest("【人間への確認依頼】が必要です。指示をお願いします。")).toBe(true);
+    expect(hasHumanEscalationRequest("CONFIRM_HUMAN: 外部決済仕様が未定義です")).toBe(true);
+
+    // 2. checkIsRejection の単体検証
+    expect(checkIsRejection("差し戻し事項はありません。承認します。")).toBe(false);
+    expect(checkIsRejection("差し戻し: なし")).toBe(false);
+    expect(checkIsRejection("リジェクト不要（LGTM）")).toBe(false);
+    expect(checkIsRejection("バグがあるためartistへ差し戻します。")).toBe(true);
+
+    // 3. STUDY-3 で発生した実際のエージェント出力（否定文脈のCONFIRM_HUMANを含むLGTM）での動作検証
+    const actualEditorOutput = `### 5. 結論
+本課題（STUDY-3）の要件定義に基づく全機能が完全に実装され、技術的・要件的観点の双方において基準をクリアしています。人間の判断を要するエスカレーション事項（CONFIRM_HUMAN）もございません。
+**要件観点LGTM（全工程完了）** とし、本タスクの完了を承認します。プルリクエストのベースブランチへのマージが可能な状態です。`;
+
+    const runner = new MockCustomRunner(() => ({
+      success: true,
+      isRejection: false,
+      summary: "要件レビュー完了",
+      output: actualEditorOutput,
+    }));
+
+    const dispatcher = new AgentDispatcher(
+      mockBacklog,
+      runner,
+      "/mock/repo",
+      false,
+      logger,
+      mockWorktreeManager,
+      mockGitHubService,
+      3
+    );
+
+    const editorIssue: BacklogIssue = {
+      ...baseIssue,
+      status: dummyStatuses[5], // 要件レビュー中 (editor)
+    };
+
+    const res = await dispatcher.processIssue(editorIssue, dummyStatuses);
+    expect(res.isEscalation).toBe(false);
+    expect(res.nextStatusTarget).toBe("完了");
   });
 });

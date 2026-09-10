@@ -3,6 +3,30 @@ import type { AgentRole, AgentContext, AgentResult, IAgentRunner } from "./types
 import { buildAgentPrompt } from "./prompts.js";
 
 /**
+ * 出力テキストから差し戻し（Rejection）判定を行う。
+ * 「差し戻しはありません」「差し戻し: なし」「リジェクト不要」等の否定表現による誤検知を防止する。
+ */
+export function checkIsRejection(outputText: string): boolean {
+  if (!outputText) return false;
+
+  const negativePatterns = [
+    /(?:差し戻し|REJECT|リジェクト)[^。\n]*?(?:なし|不要|ありません|ございません|ゼロ)/gi,
+    /(?:指摘|問題|修正)[^。\n]*?(?:差し戻し|REJECT|リジェクト)[^。\n]*?(?:なし|不要|ありません|ございません|ゼロ)/gi,
+  ];
+
+  let sanitized = outputText;
+  for (const pat of negativePatterns) {
+    sanitized = sanitized.replace(pat, "");
+  }
+
+  return (
+    sanitized.includes("差し戻し") ||
+    sanitized.includes("REJECT") ||
+    sanitized.includes("リジェクト")
+  );
+}
+
+/**
  * Antigravity CLI (agy) によるエージェントランナー
  */
 export class AgyRunner implements IAgentRunner {
@@ -137,10 +161,7 @@ export class AgyRunner implements IAgentRunner {
           outputText = outputText.slice(0, 7000) + "\n\n...[長文のため以降省略]...";
         }
 
-        const isRejection =
-          outputText.includes("差し戻し") ||
-          outputText.includes("REJECT") ||
-          outputText.includes("リジェクト");
+        const isRejection = checkIsRejection(outputText);
 
         resolve({
           role,
@@ -200,7 +221,7 @@ export class ClaudeCliRunner implements IAgentRunner {
         if (code !== 0) {
           console.error(`[ClaudeCliRunner] Claude process exited with code ${code}`);
         }
-        const isRejection = stdout.includes("差し戻し") || stdout.includes("REJECT");
+        const isRejection = checkIsRejection(stdout || stderr);
         resolve({
           role,
           success: code === 0,

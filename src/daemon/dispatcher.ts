@@ -23,6 +23,32 @@ export interface ProcessIssueResult {
   newSummary?: string;
 }
 
+/**
+ * エージェントの出力から人間への明示的な確認依頼（エスカレーション）が含まれているかを判定する。
+ * 「〜（CONFIRM_HUMAN）もございません」「【人間への確認依頼】はありません」「不要」などの否定表現や、
+ * 承認（LGTM）報告時の誤検知を防止する。
+ */
+export function hasHumanEscalationRequest(output: string): boolean {
+  if (!output) return false;
+
+  // 1. 否定文脈・不要宣言にマッチするパターンを除去
+  const negativePatterns = [
+    /(?:【人間への確認依頼】|CONFIRM_HUMAN)[^。\n]*?(?:なし|不要|ありません|ございません|ゼロ)/gi,
+    /(?:必要|事項|エスカレーション)[^。\n]*?(?:【人間への確認依頼】|CONFIRM_HUMAN)[^。\n]*?(?:なし|不要|ありません|ございません|ゼロ)/gi,
+  ];
+
+  let sanitized = output;
+  for (const pattern of negativePatterns) {
+    sanitized = sanitized.replace(pattern, "");
+  }
+
+  // 2. 明示的な確認要請キーワードの存在確認
+  return (
+    sanitized.includes("【人間への確認依頼】") ||
+    sanitized.includes("CONFIRM_HUMAN")
+  );
+}
+
 export class AgentDispatcher {
   private backlog: BacklogClient;
   private runner: IAgentRunner;
@@ -416,9 +442,7 @@ export class AgentDispatcher {
 
     // 5. 差し戻しカウント制御 & 人間確認（エスカレーション）判定
     const output = result.output || "";
-    const hasExplicitHumanRequest =
-      output.includes("【人間への確認依頼】") ||
-      output.includes("CONFIRM_HUMAN");
+    const hasExplicitHumanRequest = hasHumanEscalationRequest(output);
 
     let isEscalation = false;
     let escalationReason = "";
