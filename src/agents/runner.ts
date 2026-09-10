@@ -44,8 +44,9 @@ export class AgyRunner implements IAgentRunner {
         console.log(`[AgyRunner] ${role} エージェント実行中... (${elapsedSeconds}秒経過 / プロンプト処理・思考中)`);
       }, 10000);
 
+      const runCwd = context.workDir || this.workDir;
       const child = spawn("agy", args, {
-        cwd: this.workDir,
+        cwd: runCwd,
         env: { ...process.env },
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -239,7 +240,7 @@ export class MockRunner implements IAgentRunner {
         output = `【実装完了】\n- 設計書に基づいてコードとテストを実装しました。\n次は critic による技術レビューです。`;
         break;
       case "critic":
-        output = `【技術レビュー完了】\n- 型安全性、テスト、規約を確認しました（LGTM）。\n次は editor による要件レビューです。`;
+        output = `【技術レビュー完了】\n- 型安全性、テスト、規約、言語・ライブラリの最新性およびバージョン妥当性を確認しました（LGTM）。\n次は editor による要件レビューです。`;
         break;
       case "editor":
         output = `【要件レビュー完了】\n- チケット要件との整合性を確認しました（LGTM）。全工程が完了しました。`;

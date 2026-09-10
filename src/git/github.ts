@@ -40,6 +40,8 @@ export class GitHubService {
 
       console.log(`[GitHub] ブランチ "${branchName}" を origin に push 中 (${worktreeDir})...`);
       try {
+        // リモートが先行している場合は事前に fast-forward pull を試みる
+        await execAsync(`git pull --ff-only origin "${branchName}"`, { cwd: worktreeDir }).catch(() => {});
         await execAsync(`git push -u origin "${branchName}"`, { cwd: worktreeDir });
       } catch (pushErr: any) {
         console.warn(`[GitHub] git push 警告: ${pushErr.message}`);

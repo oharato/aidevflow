@@ -262,5 +262,50 @@ describe("Backlogフリープラン（標準4状態のみ）件名プレフィ�
     expect(lastUpdatedParams.summary).toBe("[要件レビュー完了] 決済APIリファクタリング");
     expect(lastUpdatedParams.statusId).toBe(3); // 処理済み
     expect(lastPostedComment).toContain("【レビュー依頼】AIエージェントによる全工程が完了しました");
+    expect(lastPostedComment).toContain("手元での動作確認（ローカル検証）手順");
+    expect(lastPostedComment).toContain("人間レビュー後の対応手順");
+  });
+
+  it("[要件レビュー完了]かつステータスが処理済み/完了の場合はディスパッチされないこと", () => {
+    const runner = new MockCustomRunner(() => ({ success: true, isRejection: false, summary: "", output: "" }));
+    const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/payment-service", false, logger, mockWorktreeManager, mockGitHubService, 3);
+
+    const completedIssue: BacklogIssue = {
+      ...baseIssue,
+      summary: "[要件レビュー完了] 決済APIリファクタリング",
+      status: standardStatuses[2], // 処理済み
+    };
+
+    expect(dispatcher.resolveRole(completedIssue, standardStatuses)).toBeNull();
+  });
+
+  it("[要件レビュー完了]から人間が修正を依頼しステータスを処理中に変更した場合、artistが自動起動すること", async () => {
+    let executedRole: AgentRole | null = null;
+    const runner = new MockCustomRunner((role) => {
+      executedRole = role;
+      return {
+        success: true,
+        isRejection: false,
+        summary: "指摘箇所の修正完了",
+        output: "PRに対するレビュー指摘を反映しました。次は技術レビューです。",
+      };
+    });
+
+    const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/payment-service", false, logger, mockWorktreeManager, mockGitHubService, 3);
+
+    const humanFeedbackIssue: BacklogIssue = {
+      ...baseIssue,
+      summary: "[要件レビュー完了] 決済APIリファクタリング",
+      status: standardStatuses[1], // 処理中 (人間が戻した)
+    };
+
+    expect(dispatcher.resolveRole(humanFeedbackIssue, standardStatuses)).toBe("artist");
+
+    const res = await dispatcher.processIssue(humanFeedbackIssue, standardStatuses);
+
+    expect(executedRole).toBe("artist");
+    expect(res.newSummary).toBe("[技術レビュー中] 決済APIリファクタリング");
+    expect(lastUpdatedParams.summary).toBe("[技術レビュー中] 決済APIリファクタリング");
+    expect(lastUpdatedParams.statusId).toBe(2); // 処理中
   });
 });

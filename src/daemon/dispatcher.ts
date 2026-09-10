@@ -1,4 +1,5 @@
 import path from "path";
+import fs from "fs";
 import type { BacklogClient } from "../backlog/client.js";
 import type { BacklogIssue, BacklogStatus } from "../backlog/types.js";
 import type { IAgentRunner, AgentRole, AgentContext } from "../agents/types.js";
@@ -103,8 +104,12 @@ export class AgentDispatcher {
       return this.lastRoleMap.get(issue.issueKey) || "director";
     }
 
-    // [要件レビュー完了] の場合は完了済み
+    // [要件レビュー完了] の場合:
     if (parsed.isCompleted) {
+      // 人間がレビュー後に差し戻してステータスを「処理中」に変更した場合は実装修正 (artist) を再開
+      if (statusName.includes("処理中")) {
+        return "artist";
+      }
       return null;
     }
 
@@ -187,6 +192,90 @@ export class AgentDispatcher {
     if (partial) return partial.id;
 
     return null;
+  }
+
+  /**
+   * PR作成後・レビュー完了時に、人間が手元で動作確認（検証）するための手順案内を生成する
+   */
+  generateVerificationGuide(
+    worktreeTargets: WorktreeTarget[],
+    executionWorkDir: string,
+    issueKey: string
+  ): string[] {
+    const lines: string[] = [
+      `#### 🚀 手元での動作確認（ローカル検証）手順:`,
+      `レビュー時に手元でアプリやテストを動かして確認する場合の手順です：`,
+      ``,
+    ];
+
+    if (worktreeTargets.length === 1) {
+      const target = worktreeTargets[0];
+      const dir = target.worktreeDir;
+      lines.push(`1. **ワークツリーへ移動 & 最新コードの同期**:`);
+      lines.push(`   \`\`\`bash`);
+      lines.push(`   cd ${dir}`);
+      lines.push(`   git pull origin "${issueKey}"`);
+      lines.push(`   \`\`\``);
+
+      // プロジェクト構成の検知
+      const hasDockerCompose =
+        fs.existsSync(path.join(dir, "docker-compose.yml")) ||
+        fs.existsSync(path.join(dir, "docker-compose.yaml")) ||
+        fs.existsSync(path.join(dir, "compose.yaml")) ||
+        fs.existsSync(path.join(dir, "compose.yml"));
+
+      const hasPackageJson = fs.existsSync(path.join(dir, "package.json"));
+      const hasFrontendPackageJson = fs.existsSync(path.join(dir, "frontend", "package.json"));
+      const hasBackendRequirements = fs.existsSync(path.join(dir, "backend", "requirements.txt"));
+      const hasRootRequirements = fs.existsSync(path.join(dir, "requirements.txt"));
+
+      if (hasDockerCompose) {
+        lines.push(`2. **コンテナの一括起動 (Docker Compose)**:`);
+        lines.push(`   \`\`\`bash`);
+        lines.push(`   docker compose up -d --build`);
+        lines.push(`   \`\`\``);
+        lines.push(`   - 停止時: \`docker compose down\``);
+      } else if (hasPackageJson) {
+        lines.push(`2. **依存関係のインストール & 開発サーバー起動**:`);
+        lines.push(`   \`\`\`bash`);
+        lines.push(`   pnpm install && pnpm dev`);
+        lines.push(`   \`\`\``);
+        lines.push(`   - テスト実行: \`pnpm test\``);
+      } else if (hasRootRequirements) {
+        lines.push(`2. **Python アプリの起動**:`);
+        lines.push(`   \`\`\`bash`);
+        lines.push(`   python3 -m venv .venv && source .venv/bin/activate`);
+        lines.push(`   pip install -r requirements.txt`);
+        lines.push(`   \`\`\``);
+      }
+
+      if (hasFrontendPackageJson && !hasDockerCompose) {
+        lines.push(`- **フロントエンド起動**: \`cd frontend && pnpm install && pnpm dev\``);
+      }
+      if (hasBackendRequirements && !hasDockerCompose) {
+        lines.push(`- **バックエンド起動**: \`cd backend && pip install -r requirements.txt\``);
+      }
+      if (fs.existsSync(path.join(dir, "README.md"))) {
+        lines.push(`- 💡 *ポート番号やAPIエンドポイント等の詳細はリポジトリ内の \`README.md\` をご参照ください。*`);
+      }
+    } else if (worktreeTargets.length > 1) {
+      lines.push(`1. **各リポジトリのワークツリーへ移動 & 最新コードの同期**:`);
+      for (const target of worktreeTargets) {
+        lines.push(`   - **${target.repoName}**:`);
+        lines.push(`     \`\`\`bash`);
+        lines.push(`     cd ${target.worktreeDir} && git pull origin "${issueKey}"`);
+        lines.push(`     \`\`\``);
+      }
+      lines.push(`2. **それぞれのサービスの起動手順に従って動作をご確認ください。**`);
+    } else {
+      lines.push(`1. **作業ディレクトリへ移動 & 最新コードの同期**:`);
+      lines.push(`   \`\`\`bash`);
+      lines.push(`   cd ${executionWorkDir}`);
+      lines.push(`   git pull origin "${issueKey}"`);
+      lines.push(`   \`\`\``);
+    }
+
+    return lines;
   }
 
   async processIssue(issue: BacklogIssue, projectStatuses: BacklogStatus[]): Promise<ProcessIssueResult> {
@@ -452,6 +541,12 @@ export class AgentDispatcher {
         `3. デーモンが回答内容を読み取り、カウンターをリセットして自動再開します。`
       );
     } else if (isFinalApproval) {
+      const verificationGuide = this.generateVerificationGuide(
+        worktreeTargets,
+        executionWorkDir,
+        issue.issueKey
+      );
+
       commentLines.push(
         `### 【レビュー依頼】AIエージェントによる全工程が完了しました`,
         ``,
@@ -466,9 +561,32 @@ export class AgentDispatcher {
         ...(newSummary ? [`- **新件名**: \`${newSummary}\``] : []),
         ``,
         `#### 最終要件レビュー報告:`,
-        result.output
+        result.output,
+        ``,
+        `---`,
+        ...verificationGuide,
+        ``,
+        `---`,
+        `#### [手順] 人間レビュー後の対応手順:`,
+        `- **【修正が必要な場合 (AIに再修正させる)】**:`,
+        `  1. 本チケットのコメント欄に修正指示・指摘を記入してください（PRへのコメント参照でも可）。`,
+        `  2. ステータスを **「処理中」** に変更してください。`,
+        `     - デーモンがコメントを検知し、自動的に \`artist\`（実装）が修正コミットを作成して PR に追記 push します。`,
+        `     - （※設計からの抜本的な見直しを行いたい場合は、件名を \`[詳細設計中]\` に変更してください）`,
+        `- **【問題なく完了・マージする場合】**:`,
+        `  1. GitHub 上でプルリクエストをマージしてください。`,
+        `  2. 本チケットのステータスを **「完了」** に変更してください。`
       );
     } else {
+      const guideLines: string[] = [];
+      if (prResults.length > 0) {
+        guideLines.push(
+          ``,
+          `---`,
+          ...this.generateVerificationGuide(worktreeTargets, executionWorkDir, issue.issueKey)
+        );
+      }
+
       commentLines.push(
         `### [AI] aidevflow [${role}] 処理報告`,
         `**結果**: ${result.success ? "成功" : "失敗"} (${result.isRejection ? "[差し戻し]" : "[完了/承認]"})`,
@@ -479,7 +597,8 @@ export class AgentDispatcher {
         ...(newSummary ? [`- **新件名**: \`${newSummary}\``] : []),
         ``,
         `#### 実行ログ・成果物要約:`,
-        result.output
+        result.output,
+        ...guideLines
       );
     }
 

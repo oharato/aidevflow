@@ -111,6 +111,11 @@ export class GitWorktreeManager {
 
     if (existing) {
       console.log(`[GitWorktree] 既存の worktree を再利用します: ${worktreeDir} (ブランチ: ${existing.branch})`);
+      try {
+        await execAsync(`git pull origin "${existing.branch}"`, { cwd: worktreeDir });
+      } catch {
+        // リモート未プッシュ時やネットワークエラー時はスキップ
+      }
       return worktreeDir;
     }
 
