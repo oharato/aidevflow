@@ -126,7 +126,8 @@ describe("調査タスク（実装を伴わない調査・検討・設計パイ�
       });
 
       expect(dirPrompt).toContain("【本タスクの種別】");
-      expect(dirPrompt).toContain("本タスクは【調査・検討・設計タスク（※コード実装は行わない）】です。");
+      expect(dirPrompt).toContain("本タスクは【調査・検討・設計タスク】です。");
+      expect(dirPrompt).toContain("リポジトリ内のファイル（ドキュメント、設定、検証コード等）を積極的に作成・編集・修正してください。");
       expect(dirPrompt).toContain("docs/investigation_report.md");
       expect(dirPrompt).toContain("次は curator による調査・設計レビューです");
 
@@ -139,9 +140,24 @@ describe("調査タスク（実装を伴わない調査・検討・設計パイ�
         isInvestigation: true,
       });
 
-      expect(curPrompt).toContain("本タスクは【調査・検討・設計タスク（※コード実装は行わない）】です。");
+      expect(curPrompt).toContain("本タスクは【調査・検討・設計タスク】です。");
+      expect(curPrompt).toContain("リポジトリ内のドキュメントや変更差分（git diff 等）を確認し");
       expect(curPrompt).toContain("次は全工程完了（調査完了）です");
-      expect(curPrompt).toContain("※本タスクは調査タスクのため、artistによる実装へは進みません");
+      expect(curPrompt).toContain("※本タスクは調査タスクのため、artistによる本番コード実装へは進みません");
+    });
+
+    it("通常のdirectorタスクでも「リポジトリにドキュメント残して」等の指示に対応するプロンプトが含まれること", () => {
+      const normalDirPrompt = buildAgentPrompt("director", {
+        issueKey: "STUDY-30",
+        issueSummary: "検索機能の改善",
+        issueDescription: "リポジトリにドキュメント残して",
+        recentComments: [],
+        workDir: "/mock",
+        isInvestigation: false,
+      });
+
+      expect(normalDirPrompt).toContain("リポジトリにドキュメント残して");
+      expect(normalDirPrompt).toContain("docs/detailed_design.md");
     });
   });
 
@@ -257,6 +273,39 @@ describe("調査タスク（実装を伴わない調査・検討・設計パイ�
       expect(res.nextStatusTarget).toBe(`[${PHASE_TAGS.investigationCurator}]`);
       expect(res.newSummary).toBe("[調査レビュー中] [調査] ベクトルDBの比較選定");
       expect(lastUpdatedParams.statusId).toBe(2); // 処理中
+    });
+
+    it("5. リポジトリのドキュメント修正・PR作成がある場合、調査完了コメントに PR リンクとマージ手順が含まれること", async () => {
+      const runner = new MockCustomRunner(() => ({
+        success: true,
+        isRejection: false,
+        summary: "調査・設計レビュー承認",
+        output: "調査ドキュメント docs/investigation_report.md の作成を確認しました（LGTM）。",
+      }));
+
+      const mockGitHubWithPr = {
+        ensurePullRequests: async () => [
+          {
+            repoName: "search-service",
+            prUrl: "https://github.com/org/search-service/pull/42",
+            isNew: true,
+          },
+        ],
+      } as unknown as GitHubService;
+
+      const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/search-service", false, logger, mockWorktreeManager, mockGitHubWithPr, 3);
+
+      const reviewIssue: BacklogIssue = {
+        ...investigationIssue,
+        summary: "[調査レビュー中] [調査] ベクトルDBの比較選定",
+      };
+
+      const res = await dispatcher.processIssue(reviewIssue, standardStatuses);
+
+      expect(res.nextStatusTarget).toBe(`[${PHASE_TAGS.investigationCompleted}]`);
+      expect(lastPostedComment).toContain("🔗 **GitHub プルリクエスト**");
+      expect(lastPostedComment).toContain("https://github.com/org/search-service/pull/42");
+      expect(lastPostedComment).toContain("リポジトリの変更をマージする場合は、GitHub 上でプルリクエストをマージしてください。");
     });
   });
 

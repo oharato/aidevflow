@@ -1,5 +1,9 @@
 import path from "path";
 import fs from "fs";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
 import type { BacklogClient } from "../backlog/client.js";
 import type { BacklogIssue, BacklogStatus } from "../backlog/types.js";
 import type { IAgentRunner, AgentRole, AgentContext } from "../agents/types.js";
@@ -427,7 +431,26 @@ export class AgentDispatcher {
       },
     });
 
-    // 4. GitHub PR の一括作成 / 取得 (Artist 実装完了時、最終 Editor フェーズ、または調査タスクのフェーズ)
+    // 4. 未コミットのドキュメントや修正ファイルが残っている場合、自動でステージング & コミットして保護
+    for (const target of worktreeTargets) {
+      try {
+        const { stdout: statusOut } = await execAsync("git status --porcelain", {
+          cwd: target.worktreeDir,
+        });
+        if (statusOut && statusOut.trim().length > 0) {
+          console.log(`[Dispatcher] 未コミットの変更・ドキュメントを検出 (${target.repoName})。自動コミットします...`);
+          await execAsync("git add -A", { cwd: target.worktreeDir });
+          const commitMsg = isInvestigation
+            ? `docs(${role}): record investigation and design artifacts for ${issue.issueKey}`
+            : `chore(${role}): auto commit repository artifacts for ${issue.issueKey}`;
+          await execAsync(`git commit -m "${commitMsg}"`, { cwd: target.worktreeDir });
+        }
+      } catch {
+        // コミット失敗時（差分なしやコンフリクト等）はスキップ
+      }
+    }
+
+    // 5. GitHub PR の一括作成 / 取得 (Artist 実装完了時、最終 Editor フェーズ、または調査タスクのフェーズ)
     let prResults: PullRequestResult[] = [];
     const shouldEnsurePr =
       result.success &&
@@ -603,13 +626,14 @@ export class AgentDispatcher {
           `---`,
           `#### 👤 人間レビュー後の対応手順:`,
           `- **【調査結果に問題がない場合】**:`,
-          `  1. 調査報告書や設計書（docs/ 等）をご確認ください。`,
-          `  2. 本チケットのステータスを **「完了」** に変更してクローズしてください。`,
-          `  3. （※コード実装へ進める場合は、本調査・設計結果をもとに新しい実装チケットを作成してください）`,
-          `- **【追加調査や設計見直しを依頼する場合 (AIに再調査させる)】**:`,
-          `  1. 本チケットのコメント欄に追加の論点や指示を記入してください。`,
+          `  1. 調査報告書やリポジトリのドキュメント（docs/ や PR 差分等）をご確認ください。`,
+          `  2. リポジトリの変更をマージする場合は、GitHub 上でプルリクエストをマージしてください。`,
+          `  3. 本チケットのステータスを **「完了」** に変更してクローズしてください。`,
+          `  4. （※コード実装へ進める場合は、本調査・設計結果をもとに新しい実装チケットを作成してください）`,
+          `- **【追加調査やドキュメント修正を依頼する場合 (AIに再調査させる)】**:`,
+          `  1. 本チケットのコメント欄に追加の論点や指示（「〜についてもドキュメントに追記して」等）を記入してください。`,
           `  2. ステータスを **「処理中」** に変更してください。`,
-          `     - デーモンがコメントを検知し、自動的に \`director\`（調査・設計）が再調査・修正を行います。`
+          `     - デーモンがコメントを検知し、自動的に \`director\`（調査・設計）が再調査・ドキュメント修正を行います。`
         );
       } else {
         const verificationGuide = this.generateVerificationGuide(
