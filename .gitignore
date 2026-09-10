@@ -10,3 +10,4 @@ logs/*.log
 logs/*.jsonl
 !logs/.gitkeep
 .daemon.pid
+.aidevflow.lock

@@ -6,11 +6,37 @@ import { BacklogPoller } from "./daemon/poller.js";
 import { JsonlLogger } from "./logger/jsonl.js";
 import { GitWorktreeManager } from "./git/worktree.js";
 import { GitHubService } from "./git/github.js";
+import { ProcessLock } from "./daemon/lock.js";
 
 async function main() {
   console.log("==================================================");
   console.log("       aidevflow: Backlog AI Agent Daemon         ");
   console.log("==================================================");
+
+  const lock = new ProcessLock(".aidevflow.lock");
+  const lockResult = lock.acquire();
+
+  if (!lockResult.success) {
+    console.error("==================================================");
+    console.error("【多重起動エラー】aidevflow は既に起動しています！");
+    if (lockResult.existingLock) {
+      console.error(`  - 実行中 PID: ${lockResult.existingLock.pid}`);
+      console.error(`  - 起動日時: ${lockResult.existingLock.startedAt}`);
+      if (lockResult.existingLock.command) {
+        console.error(`  - コマンド: ${lockResult.existingLock.command}`);
+      }
+    }
+    console.error(`  - ロックファイル: ${lock.getLockFilePath()}`);
+    console.error("多重起動によるワークツリー競合やステータス上書きを防ぐため、起動を中断しました。");
+    console.error("既存のプロセスを停止するか、確認の上再実行してください。");
+    console.error("==================================================");
+    process.exit(1);
+  }
+
+  if (lockResult.cleanedStaleLock) {
+    console.log("[Lock] 停止した前回のロックファイルを検知し、自動クリーンアップしました。");
+  }
+  lock.registerCleanupHandlers();
 
   const config = loadConfig();
   const logger = new JsonlLogger(config.logFilePath);
@@ -22,6 +48,7 @@ async function main() {
     console.error(".env ファイルに BACKLOG_API_KEY=xxx を設定してください。");
     console.error("設定例は .env.example を参照してください。");
     logger.error("error", "BACKLOG_API_KEY 未設定による起動失敗");
+    lock.release();
     process.exit(1);
   }
 
@@ -71,6 +98,7 @@ async function main() {
   const handleShutdown = () => {
     console.log("\nシャットダウン要求を受信しました。終了します...");
     poller.stop();
+    lock.release();
     process.exit(0);
   };
 
@@ -82,5 +110,9 @@ async function main() {
 
 main().catch((err) => {
   console.error("予期せぬエラーでデーモンが停止しました:", err);
+  try {
+    const lock = new ProcessLock(".aidevflow.lock");
+    lock.release();
+  } catch {}
   process.exit(1);
 });
