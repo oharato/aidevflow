@@ -10,6 +10,11 @@ export const PHASE_TAGS = {
   editor: "要件レビュー中",
   confirmHuman: "確認待ち",
   completed: "要件レビュー完了",
+
+  // 調査・検討タスク用フェーズタグ
+  investigationDirector: "調査中",
+  investigationCurator: "調査レビュー中",
+  investigationCompleted: "調査完了",
 } as const;
 
 export type PhaseTag = (typeof PHASE_TAGS)[keyof typeof PHASE_TAGS];
@@ -17,6 +22,66 @@ export type PhaseTag = (typeof PHASE_TAGS)[keyof typeof PHASE_TAGS];
 // 既知のプレフィックスタグの正規表現
 const ALL_TAGS_PATTERN = Object.values(PHASE_TAGS).join("|");
 const PREFIX_REGEX = new RegExp(`^\\s*\\[(${ALL_TAGS_PATTERN})\\]\\s*`, "i");
+
+/**
+ * チケットが「調査・検討・設計タスク（実装を行わないタスク）」であるかを判定する。
+ * 以下のいずれかに該当する場合に調査タスクと判定：
+ * 1. チケット種別（issueType.name）に "調査", "リサーチ", "スパイク", "spike", "investigation", "research" が含まれる
+ * 2. カテゴリー名に上記キーワードが含まれる
+ * 3. 件名に [調査], 【調査】, [リサーチ], [spike], [investigation], [調査中], [調査レビュー中], [調査完了] が含まれる
+ * 4. 本文に "タスク種別: 調査", "種別: 調査", "モード: 調査", "type: investigation" 等が含まれる
+ */
+export function isInvestigationIssue(issue: {
+  summary?: string;
+  description?: string;
+  issueType?: { name: string };
+  category?: Array<{ name: string }>;
+}): boolean {
+  const keywords = ["調査", "リサーチ", "スパイク", "spike", "investigation", "research"];
+
+  // 1. 種別判定
+  if (issue.issueType?.name) {
+    const typeName = issue.issueType.name.toLowerCase();
+    if (keywords.some((kw) => typeName.includes(kw.toLowerCase()))) {
+      return true;
+    }
+  }
+
+  // 2. カテゴリー判定
+  if (issue.category && issue.category.length > 0) {
+    for (const cat of issue.category) {
+      const catName = cat.name.toLowerCase();
+      if (keywords.some((kw) => catName.includes(kw.toLowerCase()))) {
+        return true;
+      }
+    }
+  }
+
+  // 3. 件名判定
+  if (issue.summary) {
+    const summary = issue.summary;
+    const summaryPatterns = [
+      /\[(?:調査|リサーチ|スパイク|spike|investigation|research|調査中|調査レビュー中|調査完了)\]/i,
+      /【(?:調査|リサーチ|スパイク|spike|investigation|research|調査中|調査レビュー中|調査完了)】/i,
+    ];
+    if (summaryPatterns.some((p) => p.test(summary))) {
+      return true;
+    }
+  }
+
+  // 4. 本文判定
+  if (issue.description) {
+    const desc = issue.description;
+    const descPatterns = [
+      /(?:タスク種別|種別|モード|パイプライン|mode|type)\s*[:：]\s*(?:調査|リサーチ|スパイク|spike|investigation|research)/i,
+    ];
+    if (descPatterns.some((p) => p.test(desc))) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 /**
  * プロジェクトのステータス一覧に、カスタム状態が存在するか判定する
@@ -59,8 +124,10 @@ export function parsePhaseFromSummary(summary: string): {
   const tag = match[1];
 
   switch (tag) {
+    case PHASE_TAGS.investigationDirector:
     case PHASE_TAGS.director:
       return { role: "director", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
+    case PHASE_TAGS.investigationCurator:
     case PHASE_TAGS.curator:
       return { role: "curator", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
     case PHASE_TAGS.artist:
@@ -71,6 +138,7 @@ export function parsePhaseFromSummary(summary: string): {
       return { role: "editor", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
     case PHASE_TAGS.confirmHuman:
       return { role: null, isWaitingConfirmation: true, isCompleted: false, tag, cleanSummary };
+    case PHASE_TAGS.investigationCompleted:
     case PHASE_TAGS.completed:
       return { role: null, isWaitingConfirmation: false, isCompleted: true, tag, cleanSummary };
     default:
@@ -89,24 +157,36 @@ export function formatSummaryWithPhase(summary: string, phaseTag: string): strin
 /**
  * 次のフェーズタグ名を取得する
  */
-export function getNextPhaseTag(currentRole: AgentRole, isRejection: boolean): string {
+export function getNextPhaseTag(
+  currentRole: AgentRole,
+  isRejection: boolean,
+  isInvestigation: boolean = false
+): string {
   if (isRejection) {
     switch (currentRole) {
       case "curator":
-        return PHASE_TAGS.director; // 詳細設計中
+        return isInvestigation
+          ? PHASE_TAGS.investigationDirector // 調査中
+          : PHASE_TAGS.director; // 詳細設計中
       case "critic":
       case "editor":
         return PHASE_TAGS.artist; // 実装中
       default:
-        return PHASE_TAGS.director;
+        return isInvestigation
+          ? PHASE_TAGS.investigationDirector
+          : PHASE_TAGS.director;
     }
   }
 
   switch (currentRole) {
     case "director":
-      return PHASE_TAGS.curator; // 設計レビュー中
+      return isInvestigation
+        ? PHASE_TAGS.investigationCurator // 調査レビュー中
+        : PHASE_TAGS.curator; // 設計レビュー中
     case "curator":
-      return PHASE_TAGS.artist; // 実装中
+      return isInvestigation
+        ? PHASE_TAGS.investigationCompleted // 調査完了
+        : PHASE_TAGS.artist; // 実装中
     case "artist":
       return PHASE_TAGS.critic; // 技術レビュー中
     case "critic":

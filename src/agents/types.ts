@@ -6,6 +6,7 @@ export interface AgentContext {
   issueDescription: string;
   recentComments: string[];
   workDir: string;
+  isInvestigation?: boolean;
 }
 
 export interface AgentResult {

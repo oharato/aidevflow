@@ -13,6 +13,7 @@ import {
   formatSummaryWithPhase,
   getNextPhaseTag,
   PHASE_TAGS,
+  isInvestigationIssue,
 } from "../backlog/prefix-helper.js";
 
 export interface ProcessIssueResult {
@@ -130,11 +131,13 @@ export class AgentDispatcher {
       return this.lastRoleMap.get(issue.issueKey) || "director";
     }
 
-    // [要件レビュー完了] の場合:
+    // [要件レビュー完了] または [調査完了] の場合:
     if (parsed.isCompleted) {
-      // 人間がレビュー後に差し戻してステータスを「処理中」に変更した場合は実装修正 (artist) を再開
+      // 人間がレビュー後に差し戻してステータスを「処理中」に変更した場合:
+      // 調査タスクなら再調査・設計修正 (director)、実装タスクなら実装修正 (artist) を再開
       if (statusName.includes("処理中")) {
-        return "artist";
+        const isInvestigation = isInvestigationIssue(issue);
+        return isInvestigation ? "director" : "artist";
       }
       return null;
     }
@@ -154,13 +157,13 @@ export class AgentDispatcher {
   resolveRoleFromStatus(statusName: string): AgentRole | null {
     const s = statusName.toLowerCase();
 
-    // 1. 詳細設計 (director)
-    if (s.includes("詳細設計") || s.includes("設計中") || s.includes("director")) {
+    // 1. 詳細設計 / 調査 (director)
+    if (s.includes("詳細設計") || s.includes("設計中") || s.includes("調査中") || s.includes("director")) {
       return "director";
     }
 
-    // 2. 詳細設計レビュー (curator)
-    if (s.includes("設計レビュー") || s.includes("curator")) {
+    // 2. 詳細設計レビュー / 調査レビュー (curator)
+    if (s.includes("設計レビュー") || s.includes("調査レビュー") || s.includes("curator")) {
       return "curator";
     }
 
@@ -182,7 +185,11 @@ export class AgentDispatcher {
     return null;
   }
 
-  getNextStatusName(currentRole: AgentRole, isRejection: boolean): string {
+  getNextStatusName(
+    currentRole: AgentRole,
+    isRejection: boolean,
+    isInvestigation: boolean = false
+  ): string {
     if (isRejection) {
       switch (currentRole) {
         case "curator":
@@ -199,7 +206,7 @@ export class AgentDispatcher {
       case "director":
         return "設計レビュー";
       case "curator":
-        return "実装";
+        return isInvestigation ? "完了" : "実装";
       case "artist":
         return "技術レビュー";
       case "critic":
@@ -383,12 +390,15 @@ export class AgentDispatcher {
       console.warn(`[Dispatcher] コメント取得スキップ:`, e);
     }
 
+    const isInvestigation = isInvestigationIssue(issue);
+
     const context: AgentContext = {
       issueKey: issue.issueKey,
       issueSummary: issue.summary,
       issueDescription: issue.description || "",
       recentComments,
       workDir: executionWorkDir,
+      isInvestigation,
     };
 
     // 3. エージェント実行
@@ -417,9 +427,16 @@ export class AgentDispatcher {
       },
     });
 
-    // 4. GitHub PR の一括作成 / 取得 (Artist 実装完了時、または最終 Editor フェーズ)
+    // 4. GitHub PR の一括作成 / 取得 (Artist 実装完了時、最終 Editor フェーズ、または調査タスクのフェーズ)
     let prResults: PullRequestResult[] = [];
-    if (result.success && !result.isRejection && (role === "artist" || role === "editor")) {
+    const shouldEnsurePr =
+      result.success &&
+      !result.isRejection &&
+      (role === "artist" ||
+        role === "editor" ||
+        (isInvestigation && (role === "director" || role === "curator")));
+
+    if (shouldEnsurePr) {
       console.log(`[Dispatcher] GitHub プルリクエストを準備中 (${worktreeTargets.length}リポジトリ)...`);
       prResults = await this.githubService.ensurePullRequests(
         worktreeTargets.map((t) => ({ repoName: t.repoName, worktreeDir: t.worktreeDir })),
@@ -473,7 +490,10 @@ export class AgentDispatcher {
     let nextStatusTarget: string;
     let newSummary: string | undefined;
     let nextStatusId: number | null = null;
-    const isFinalApproval = role === "editor" && !result.isRejection && !isEscalation;
+    const isFinalApproval =
+      !result.isRejection &&
+      !isEscalation &&
+      (isInvestigation ? role === "curator" : role === "editor");
     const isCustom = this.isCustomStatusMode(projectStatuses);
 
     if (isCustom) {
@@ -481,7 +501,7 @@ export class AgentDispatcher {
       if (isEscalation) {
         nextStatusTarget = "確認待ち";
       } else {
-        nextStatusTarget = this.getNextStatusName(role, result.isRejection ?? false);
+        nextStatusTarget = this.getNextStatusName(role, result.isRejection ?? false, isInvestigation);
       }
       nextStatusId = this.findStatusIdByName(projectStatuses, nextStatusTarget);
     } else {
@@ -493,7 +513,7 @@ export class AgentDispatcher {
         // 人間に気付かせるため標準ステータス「未対応」へ
         nextStatusId = this.findStatusIdByName(projectStatuses, "未対応") || 1;
       } else {
-        const nextPhaseTag = getNextPhaseTag(role, result.isRejection ?? false);
+        const nextPhaseTag = getNextPhaseTag(role, result.isRejection ?? false, isInvestigation);
         newSummary = formatSummaryWithPhase(issue.summary, nextPhaseTag);
         nextStatusTarget = `[${nextPhaseTag}]`;
         if (isFinalApproval) {
@@ -565,45 +585,73 @@ export class AgentDispatcher {
         `3. デーモンが回答内容を読み取り、カウンターをリセットして自動再開します。`
       );
     } else if (isFinalApproval) {
-      const verificationGuide = this.generateVerificationGuide(
-        worktreeTargets,
-        executionWorkDir,
-        issue.issueKey
-      );
+      if (isInvestigation) {
+        commentLines.push(
+          `### 【調査完了報告】AIエージェントによる調査・設計フェーズが完了しました`,
+          ``,
+          `チケット **${issue.issueKey}: ${newSummary || issue.summary}** に対する調査・検討・設計工程（director 調査・設計 → curator 調査・設計レビュー）が完了しました。`,
+          ``,
+          ...prSectionLines,
+          `- **ブランチ**: \`${issue.issueKey}\``,
+          `- **作業 Worktree**: \`${executionWorkDir}\``,
+          `- **ステータス**: ${nextStatusTarget}`,
+          ...(newSummary ? [`- **新件名**: \`${newSummary}\``] : []),
+          ``,
+          `#### 調査・設計レビュー報告:`,
+          result.output,
+          ``,
+          `---`,
+          `#### 👤 人間レビュー後の対応手順:`,
+          `- **【調査結果に問題がない場合】**:`,
+          `  1. 調査報告書や設計書（docs/ 等）をご確認ください。`,
+          `  2. 本チケットのステータスを **「完了」** に変更してクローズしてください。`,
+          `  3. （※コード実装へ進める場合は、本調査・設計結果をもとに新しい実装チケットを作成してください）`,
+          `- **【追加調査や設計見直しを依頼する場合 (AIに再調査させる)】**:`,
+          `  1. 本チケットのコメント欄に追加の論点や指示を記入してください。`,
+          `  2. ステータスを **「処理中」** に変更してください。`,
+          `     - デーモンがコメントを検知し、自動的に \`director\`（調査・設計）が再調査・修正を行います。`
+        );
+      } else {
+        const verificationGuide = this.generateVerificationGuide(
+          worktreeTargets,
+          executionWorkDir,
+          issue.issueKey
+        );
 
-      commentLines.push(
-        `### 【レビュー依頼】AIエージェントによる全工程が完了しました`,
-        ``,
-        `チケット **${issue.issueKey}: ${newSummary || issue.summary}** に対するすべての開発工程（詳細設計 → 設計レビュー → 実装 → 技術レビュー → 要件レビュー）が完了しました。`,
-        ``,
-        `以下のプルリクエストをご確認の上、レビュー・マージをお願いいたします。`,
-        ``,
-        ...prSectionLines,
-        `- **ブランチ**: \`${issue.issueKey}\``,
-        `- **作業 Worktree**: \`${executionWorkDir}\``,
-        `- **ステータス**: ${nextStatusTarget}`,
-        ...(newSummary ? [`- **新件名**: \`${newSummary}\``] : []),
-        ``,
-        `#### 最終要件レビュー報告:`,
-        result.output,
-        ``,
-        `---`,
-        ...verificationGuide,
-        ``,
-        `---`,
-        `#### [手順] 人間レビュー後の対応手順:`,
-        `- **【修正が必要な場合 (AIに再修正させる)】**:`,
-        `  1. 本チケットのコメント欄に修正指示・指摘を記入してください（PRへのコメント参照でも可）。`,
-        `  2. ステータスを **「処理中」** に変更してください。`,
-        `     - デーモンがコメントを検知し、自動的に \`artist\`（実装）が修正コミットを作成して PR に追記 push します。`,
-        `     - （※設計からの抜本的な見直しを行いたい場合は、件名を \`[詳細設計中]\` に変更してください）`,
-        `- **【問題なく完了・マージする場合】**:`,
-        `  1. GitHub 上でプルリクエストをマージしてください。`,
-        `  2. 本チケットのステータスを **「完了」** に変更してください。`
-      );
+        commentLines.push(
+          `### 【レビュー依頼】AIエージェントによる全工程が完了しました`,
+          ``,
+          `チケット **${issue.issueKey}: ${newSummary || issue.summary}** に対するすべての開発工程（詳細設計 → 設計レビュー → 実装 → 技術レビュー → 要件レビュー）が完了しました。`,
+          ``,
+          `以下のプルリクエストをご確認の上、レビュー・マージをお願いいたします。`,
+          ``,
+          ...prSectionLines,
+          `- **ブランチ**: \`${issue.issueKey}\``,
+          `- **作業 Worktree**: \`${executionWorkDir}\``,
+          `- **ステータス**: ${nextStatusTarget}`,
+          ...(newSummary ? [`- **新件名**: \`${newSummary}\``] : []),
+          ``,
+          `#### 最終要件レビュー報告:`,
+          result.output,
+          ``,
+          `---`,
+          ...verificationGuide,
+          ``,
+          `---`,
+          `#### [手順] 人間レビュー後の対応手順:`,
+          `- **【修正が必要な場合 (AIに再修正させる)】**:`,
+          `  1. 本チケットのコメント欄に修正指示・指摘を記入してください（PRへのコメント参照でも可）。`,
+          `  2. ステータスを **「処理中」** に変更してください。`,
+          `     - デーモンがコメントを検知し、自動的に \`artist\`（実装）が修正コミットを作成して PR に追記 push します。`,
+          `     - （※設計からの抜本的な見直しを行いたい場合は、件名を \`[詳細設計中]\` に変更してください）`,
+          `- **【問題なく完了・マージする場合】**:`,
+          `  1. GitHub 上でプルリクエストをマージしてください。`,
+          `  2. 本チケットのステータスを **「完了」** に変更してください。`
+        );
+      }
     } else {
       const guideLines: string[] = [];
-      if (prResults.length > 0) {
+      if (prResults.length > 0 && !isInvestigation) {
         guideLines.push(
           ``,
           `---`,
