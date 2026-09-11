@@ -61,8 +61,8 @@ pnpm run setup:statuses
 ```
 
 登録される状態：
-- **詳細設計中** (`#3b9dbd` 水色) - Architect 担当
-- **設計レビュー中** (`#868cb7` 青紫) - Tech-Lead 担当
+- **詳細設計中** (`#3b9dbd` 水色) - Spec-Writer 担当
+- **設計レビュー中** (`#868cb7` 青紫) - Spec-Reviewer 担当
 - **実装中** (`#eda62a` オレンジ) - Developer 担当
 - **技術レビュー中** (`#b0be3c` 黄緑) - Code-Reviewer 担当
 - **要件レビュー中** (`#e07b9a` ピンク) - Requirement-Reviewer 担当

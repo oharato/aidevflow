@@ -43,12 +43,12 @@ describe("エージェントプロンプト生成 (buildAgentPrompt)", () => {
     expect(prompt).toContain("具体的なバージョン番号で明示・固定");
   });
 
-  it("Architect / Tech-Lead / Requirement-Reviewer のプロンプトも正常に生成されること", () => {
-    const architectPrompt = buildAgentPrompt("architect", dummyContext);
-    expect(architectPrompt).toContain("あなたは【architect（詳細設計エージェント）】です。");
+  it("Spec-Writer / Spec-Reviewer / Requirement-Reviewer のプロンプトも正常に生成されること", () => {
+    const specWriterPrompt = buildAgentPrompt("spec-writer", dummyContext);
+    expect(specWriterPrompt).toContain("あなたは【spec-writer（詳細仕様策定エージェント）】です。");
 
-    const techLeadPrompt = buildAgentPrompt("tech-lead", dummyContext);
-    expect(techLeadPrompt).toContain("あなたは【tech-lead（詳細設計レビューエージェント）】です。");
+    const specReviewerPrompt = buildAgentPrompt("spec-reviewer", dummyContext);
+    expect(specReviewerPrompt).toContain("あなたは【spec-reviewer（詳細仕様レビューエージェント）】です。");
 
     const reqReviewerPrompt = buildAgentPrompt("requirement-reviewer", dummyContext);
     expect(reqReviewerPrompt).toContain("あなたは【requirement-reviewer（要件的観点レビューエージェント）】です。");

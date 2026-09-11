@@ -104,7 +104,7 @@ describe("Fastモード（軽量パイプライン: 実装 -> 統合レビュー
   });
 
   describe("Fastモードのライフサイクル（developer -> code-reviewer 統合レビュー -> 全工程完了）", () => {
-    it("Fastモードチケット着手時、詳細設計(architect)をスキップして直接developerが初期ロールとなること", () => {
+    it("Fastモードチケット着手時、詳細仕様(spec-writer)をスキップして直接developerが初期ロールとなること", () => {
       const runner = new MockCustomRunner(() => ({ success: true, isRejection: false, summary: "", output: "" }));
       const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/auth-service", false, logger, mockWorktreeManager, mockGitHubService, 3);
 

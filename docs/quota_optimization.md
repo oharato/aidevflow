@@ -9,7 +9,7 @@
 
 1. **重量級モデル（Pro）の無指定デフォルト起動**: CLI (`agy`) 呼び出し時にモデルが明示されておらず、高コスト・低クォータ枠のモデルが全工程で使用されていた。
 2. **推論エフォート（Effort）の過剰**: レビューや確認フェーズも含めて `medium` で実行され、思考トークン（Thinking tokens）が大量に消費されていた。
-3. **調査タスク判定の書式制約によるフェーズ増大**: 本文の `種別\n調査`（改行区切り）がコロン必須の正規表現に合致せず、本来2フェーズ（architect → tech-lead）で完了するタスクが5フェーズ（developer → code-reviewer → requirement-reviewer まで）すべて実行されていた。
+3. **調査タスク判定の書式制約によるフェーズ増大**: 本文の `種別\n調査`（改行区切り）がコロン必須の正規表現に合致せず、本来2フェーズ（spec-writer → spec-reviewer）で完了するタスクが5フェーズ（developer → code-reviewer → requirement-reviewer まで）すべて実行されていた。
 4. **コメント履歴の肥大化**: プロンプト注入時に、過去の AI 自身による長大な処理報告（markdown 表やコード等）がそのまま蓄積され、プロンプトの入力トークンを圧迫していた。
 5. **固定5段階パイプライン**: 軽微な改修や単一ファイル修正であっても、常に5つのエージェントが順次実行されていた。
 
@@ -25,8 +25,8 @@ flowchart TD
 
     %% 調査タスク (2フェーズ)
     Analysis -->|"調査・設計\n(種別: 調査 / 改行対応)"| InvPath["調査パイプライン (2フェーズ)"]
-    InvPath --> Inv1["1. architect (調査・設計)\n[gemini-3.8-flash-high]"]
-    Inv1 --> Inv2["2. tech-lead (調査レビュー)\n[gemini-3.8-flash-medium]"]
+    InvPath --> Inv1["1. spec-writer (調査・仕様)\n[gemini-3.8-flash-high]"]
+    Inv1 --> Inv2["2. spec-reviewer (調査レビュー)\n[gemini-3.8-flash-medium]"]
     Inv2 --> InvDone["調査完了 (ステータス: 処理済み/完了)"]
 
     %% Fastモード (2フェーズ)
@@ -37,8 +37,8 @@ flowchart TD
 
     %% 通常タスク (Full 5フェーズ)
     Analysis -->|"新規開発 / 大規模改修\n(通常モード)"| FullPath["Full パイプライン (5フェーズ)"]
-    FullPath --> F1["1. architect (詳細設計)\n[gemini-3.8-flash-high]"]
-    F1 --> F2["2. tech-lead (設計レビュー)\n[gemini-3.8-flash-medium]"]
+    FullPath --> F1["1. spec-writer (詳細仕様)\n[gemini-3.8-flash-high]"]
+    F1 --> F2["2. spec-reviewer (仕様レビュー)\n[gemini-3.8-flash-medium]"]
     F2 --> F3["3. developer (実装 & テスト)\n[gemini-3.8-flash-high]"]
     F3 --> F4["4. code-reviewer (技術レビュー)\n[gemini-3.8-flash-medium]"]
     F4 --> F5["5. requirement-reviewer (要件レビュー)\n[gemini-3.8-flash-medium]"]

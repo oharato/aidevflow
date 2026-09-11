@@ -103,7 +103,7 @@ describe("Backlogフリープラン（標準4状態のみ）件名プレフィ�
     expect(dispatcher.isCustomStatusMode(standardStatuses)).toBe(false);
   });
 
-  it("タグなしチケット着手でarchitectが実行され、件名が[設計レビュー中]に自動更新されること", async () => {
+  it("タグなしチケット着手でspec-writerが実行され、件名が[設計レビュー中]に自動更新されること", async () => {
     const runner = new MockCustomRunner(() => ({
       success: true,
       isRejection: false,

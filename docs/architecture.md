@@ -65,8 +65,8 @@ flowchart TD
     end
 
     subgraph Agents["5つの専門エージェント (Antigravity CLI: agy)"]
-        Architect["1. Architect\n(詳細設計エージェント)"]
-        TechLead["2. Tech-Lead\n(詳細設計レビューエージェント)"]
+        SpecWriter["1. Spec-Writer\n(詳細仕様策定エージェント)"]
+        SpecReviewer["2. Spec-Reviewer\n(詳細仕様レビューエージェント)"]
         Developer["3. Developer\n(実装 & テスト & コミット)"]
         CodeReviewer["4. Code-Reviewer\n(技術的レビュー: 静的解析/型/規約/Gitコンフリクト/言語・依存最新性)"]
         ReqReviewer["5. Requirement-Reviewer\n(要件的レビュー: 要件充足度/マージ整合性)"]
@@ -79,8 +79,8 @@ flowchart TD
     WorktreeMgr -->|"git clone / fetch"| Repos
     Repos -->|"git worktree add"| Worktrees
 
-    Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| Architect
-    Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| TechLead
+    Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| SpecWriter
+    Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| SpecReviewer
     Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| Developer
     Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| CodeReviewer
     Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| ReqReviewer
@@ -174,10 +174,10 @@ APIエンドポイントを追加し、UI側でデータを表示する。
 ```mermaid
 stateDiagram-v2
     [*] --> 詳細設計中: チケット作成 / 開始
-    詳細設計中 --> 設計レビュー中: architect完了
+    詳細設計中 --> 設計レビュー中: spec-writer完了
     
-    設計レビュー中 --> 実装中: tech-lead承認 (LGTM)
-    設計レビュー中 --> 詳細設計中: tech-lead差し戻し (リトライ < 上限)
+    設計レビュー中 --> 実装中: spec-reviewer承認 (LGTM)
+    設計レビュー中 --> 詳細設計中: spec-reviewer差し戻し (リトライ < 上限)
 
     実装中 --> 技術レビュー中: developer実装・コミット完了
     技術レビュー中 --> 要件レビュー中: code-reviewer承認 (LGTM)
@@ -241,8 +241,8 @@ Backlog のフリープランや一部下位プランでは、API によるカ�
 | エージェント / フェーズ | 標準ステータス | 件名プレフィックス | 説明 |
 | :--- | :--- | :--- | :--- |
 | **開始前 / 人間確認待ち** | **未対応** (`statusId=1`) | なし、または `[確認待ち]` | 人間が起票した直後、またはAIからの質問停止時 |
-| **Architect (詳細設計)** | **処理中** (`statusId=2`) | `[詳細設計中]` | チケット着手直後。要件から詳細設計書を作成 |
-| **Tech-Lead (設計レビュー)** | **処理中** (`statusId=2`) | `[設計レビュー中]` | 設計書の客観的レビュー・差し戻し判定 |
+| **Spec-Writer (詳細仕様策定)** | **処理中** (`statusId=2`) | `[詳細設計中]` | チケット着手直後。要件から詳細仕様書（設計書）を作成 |
+| **Spec-Reviewer (詳細仕様レビュー)** | **処理中** (`statusId=2`) | `[設計レビュー中]` | 仕様書（設計書）の客観的レビュー・差し戻し判定 |
 | **Developer (実装)** | **処理中** (`statusId=2`) | `[実装中]` | コード実装、単体テスト、Git コミット |
 | **Code-Reviewer (技術レビュー)** | **処理中** (`statusId=2`) | `[技術レビュー中]` | 静的解析・型・セキュリティ・品質・Gitコンフリクト・言語/依存ライブラリ最新性レビュー |
 | **Requirement-Reviewer (要件レビュー)** | **処理中** (`statusId=2`) | `[要件レビュー中]` | 元のチケット要件を満たしているかの最終検査・マージ整合性確認 |
@@ -257,16 +257,16 @@ Backlog のフリープランや一部下位プランでは、API によるカ�
 
 ## 7. 調査タスク対応（実装を伴わない調査・検討・設計パイプライン）
 
-「コード実装ではなく技術調査・比較検討・アーキテクチャ設計・スパイク（Spike）を行いたい」というユースケースに対応するため、**設計（Architect）と設計レビュー（Tech-Lead）のみで完了する調査モード**をサポートしています。
+「コード実装ではなく技術調査・比較検討・アーキテクチャ設計・スパイク（Spike）を行いたい」というユースケースに対応するため、**仕様・設計（Spec-Writer）とレビュー（Spec-Reviewer）のみで完了する調査モード**をサポートしています。
 
 ```mermaid
 flowchart TD
-    Issue["Backlog チケット起票\n(種別/カテゴリ/件名に [調査] や Spike を指定)"] --> Architect["1. Architect\n(技術調査・比較検討・設計書作成)"]
-    Architect -->|"成果物: docs/investigation_report.md"| TechLead["2. Tech-Lead\n(調査結果・設計書の客観レビュー)"]
-    TechLead -->|"差し戻し (不足・追加調査)"| Architect
-    TechLead -->|"承認 (LGTM)"| Done["調査完了 (ステータス: 処理済み)\n★ 調査報告書レビュー依頼コメント投稿"]
+    Issue["Backlog チケット起票\n(種別/カテゴリ/件名に [調査] や Spike を指定)"] --> SpecWriter["1. Spec-Writer\n(技術調査・比較検討・仕様書作成)"]
+    SpecWriter -->|"成果物: docs/investigation_report.md"| SpecReviewer["2. Spec-Reviewer\n(調査結果・仕様書の客観レビュー)"]
+    SpecReviewer -->|"差し戻し (不足・追加調査)"| SpecWriter
+    SpecReviewer -->|"承認 (LGTM)"| Done["調査完了 (ステータス: 処理済み)\n★ 調査報告書レビュー依頼コメント投稿"]
     Done -->|"人間による確認完了"| Closed["チケット完了 (クローズ)"]
-    Done -->|"人間による追加調査指示\n(コメント ＋ ステータス「処理中」)"| Architect
+    Done -->|"人間による追加調査指示\n(コメント ＋ ステータス「処理中」)"| SpecWriter
 ```
 
 ### 1. 調査タスクの自動判別条件
@@ -277,14 +277,14 @@ flowchart TD
 4. **本文指定**: `タスク種別: 調査`, `種別: 調査`, `モード: 調査`, `type: investigation`
 
 ### 2. 調査タスクにおけるパイプラインの動き
-- **Architect（調査・設計）**:
+- **Spec-Writer（調査・仕様策定）**:
   - チケットの背景や論点に基づき、技術検証、フィジビリティスタディ、比較検討を実施。
   - **リポジトリへのドキュメント作成・修正**:
     - チケット要件や指示（例: 「リポジトリにドキュメント残して」「READMEに追記して」「docs/に設計書を作成して」等）がある場合、リポジトリ内のファイル（`docs/investigation_report.md`、`docs/detailed_design.md`、`README.md`、検証コード等）を直接作成・編集し、Git コミットします。
     - 万が一エージェントがコミットコマンドを実行し忘れた場合でも、デーモンが未コミットの成果物を自動検知して安全に自動コミットします。
-- **Tech-Lead（調査レビュー）**:
+- **Spec-Reviewer（調査・仕様レビュー）**:
   - 調査結果やリポジトリの修正差分（git diff）の妥当性、論点の網羅性を客観的にレビュー。
-  - 不足があれば Architect へ差し戻し。軽微な修正であれば自らリポジトリファイルを修正してコミット可能。
+  - 不足があれば Spec-Writer へ差し戻し。軽微な修正であれば自らリポジトリファイルを修正してコミット可能。
   - 問題がなければ **「承認（LGTM）」** とし、**Developer（実装）へは進まず全工程完了（調査完了）** と判定。
 - **GitHub PR の自動作成**:
   - リポジトリに変更・コミットがある場合、自動的に GitHub へブランチが push され、Pull Request が作成されます。
@@ -293,13 +293,13 @@ flowchart TD
   - ステータス: **「処理済み」**（カスタム状態利用時は「完了」）
   - コメント: PR リンク、調査報告書の要約、および人間向けの対応手順（PRマージ方法、追加調査指示方法）を自動投稿。
 - **人間による追加指示フロー**:
-  - 人間がレビュー後にチケットコメントに追加指示（「〜についてもドキュメントに追記して」等）を書き、ステータスを **「処理中」** に戻すと、自動的に **Architect（再調査・設計修正）** が再起動してリポジトリのドキュメントを更新します。
+  - 人間がレビュー後にチケットコメントに追加指示（「〜についてもドキュメントに追記して」等）を書き、ステータスを **「処理中」** に戻すと、自動的に **Spec-Writer（再調査・仕様修正）** が再起動してリポジトリのドキュメントを更新します。
 
 ---
 
 ## 8. Fast モード対応（軽量2段階パイプライン: 実装 → 統合レビュー）
 
-「既知の軽微なバグ修正」「文言やスタイルの変更」「小規模なリファクタリング」など、詳細設計フェーズ（Architect/Tech-Lead）を必要としないタスク向けに、**実装（Developer）と統合レビュー（Code-Reviewer）の2フェーズのみで完了する「Fast モード」** をサポートしています。
+「既知の軽微なバグ修正」「文言やスタイルの変更」「小規模なリファクタリング」など、詳細仕様策定フェーズ（Spec-Writer/Spec-Reviewer）を必要としないタスク向けに、**実装（Developer）と統合レビュー（Code-Reviewer）の2フェーズのみで完了する「Fast モード」** をサポートしています。
 
 ```mermaid
 flowchart TD
@@ -363,7 +363,7 @@ flowchart TD
     FilterCheck{"フィルタ条件チェック\n- TARGET_ISSUE_TYPE\n- TARGET_CATEGORY\n- REQUIRE_AI_TAG"}
     
     Ignore["スキップ (AI 処理対象外)"]
-    Dispatch["AI パイプライン開始\n[詳細設計中] -> Architect"]
+    Dispatch["AI パイプライン開始\n[詳細設計中] -> Spec-Writer"]
 
     Create --> Draft
     Draft -->|"書きかけ"| Ignore
@@ -393,7 +393,7 @@ AGENT_RUNNER=mock pnpm start
 ```
 
 ### 目的
-LLM（Claude や Gemini 等）の実際の呼び出しを行わず、各専門エージェント（Architect, Tech-Lead, Developer, Code-Reviewer, Requirement-Reviewer）の処理結果・承認・成果物生成を数秒の擬似ディレイとともにシミュレートする動作検証モードです。
+LLM（Claude や Gemini 等）の実際の呼び出しを行わず、各専門エージェント（Spec-Writer, Spec-Reviewer, Developer, Code-Reviewer, Requirement-Reviewer）の処理結果・承認・成果物生成を数秒の擬似ディレイとともにシミュレートする動作検証モードです。
 
 ### 利点と用途
 - **トークン消費ゼロ & 即時検証**: API 課金やレートリミットを気にせず、短時間でエンドツーエンドの挙動を確認可能。
@@ -424,7 +424,7 @@ LLM（Claude や Gemini 等）の実際の呼び出しを行わず、各専門�
                │                         │
        ┌───────┴───────┐         ┌───────┴───────┐
        ▼               ▼         ▼               ▼
-  [developer]   [code-reviewer] [architect]  [tech-lead]
+  [developer]   [code-reviewer] [spec-writer] [spec-reviewer]
   (Agent #1)                     (Agent #2)
        │                                 │
        └──────────────┬──────────────────┘

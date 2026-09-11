@@ -9,8 +9,8 @@ interface TargetStatus {
 }
 
 const REQUIRED_STATUSES: TargetStatus[] = [
-  { name: "詳細設計中", color: "#3b9dbd", description: "Architect (詳細設計作成)" },
-  { name: "設計レビュー中", color: "#868cb7", description: "Tech-Lead (詳細設計レビュー)" },
+  { name: "詳細設計中", color: "#3b9dbd", description: "Spec-Writer (詳細仕様書作成)" },
+  { name: "設計レビュー中", color: "#868cb7", description: "Spec-Reviewer (詳細仕様レビュー)" },
   { name: "実装中", color: "#eda62a", description: "Developer (コード実装 & コミット)" },
   { name: "技術レビュー中", color: "#b0be3c", description: "Code-Reviewer (技術レビュー: 型/規約/バグ/依存バージョン)" },
   { name: "要件レビュー中", color: "#e07b9a", description: "Requirement-Reviewer (要件充足度レビュー)" },

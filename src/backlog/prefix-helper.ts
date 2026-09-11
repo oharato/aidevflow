@@ -3,16 +3,21 @@ import type { BacklogStatus } from "./types.js";
 
 // フェーズとプレフィックス名のマッピング
 export const PHASE_TAGS = {
-  architect: "詳細設計中",
-  techLead: "設計レビュー中",
+  specWriter: "詳細設計中",
+  specReviewer: "設計レビュー中",
   developer: "実装中",
   codeReviewer: "技術レビュー中",
   requirementReviewer: "要件レビュー中",
-  qa: "要件レビュー中", // 後方互換エイリアス
+  // 後方互換キー
+  architect: "詳細設計中",
+  techLead: "設計レビュー中",
+  qa: "要件レビュー中",
   confirmHuman: "確認待ち",
   completed: "要件レビュー完了",
 
   // 調査・検討タスク用フェーズタグ
+  investigationSpecWriter: "調査中",
+  investigationSpecReviewer: "調査レビュー中",
   investigationArchitect: "調査中",
   investigationTechLead: "調査レビュー中",
   investigationCompleted: "調査完了",
@@ -175,12 +180,16 @@ export function parsePhaseFromSummary(summary: string): {
   const tag = match[1];
 
   switch (tag) {
+    case PHASE_TAGS.investigationSpecWriter:
     case PHASE_TAGS.investigationArchitect:
+    case PHASE_TAGS.specWriter:
     case PHASE_TAGS.architect:
-      return { role: "architect", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
+      return { role: "spec-writer", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
+    case PHASE_TAGS.investigationSpecReviewer:
     case PHASE_TAGS.investigationTechLead:
+    case PHASE_TAGS.specReviewer:
     case PHASE_TAGS.techLead:
-      return { role: "tech-lead", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
+      return { role: "spec-reviewer", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
     case PHASE_TAGS.developer:
       return { role: "developer", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
     case PHASE_TAGS.codeReviewer:
@@ -217,26 +226,28 @@ export function getNextPhaseTag(
 ): string {
   if (isRejection) {
     switch (currentRole) {
-      case "tech-lead":
+      case "spec-reviewer":
         return isInvestigation
-          ? PHASE_TAGS.investigationArchitect // 調査中
-          : PHASE_TAGS.architect; // 詳細設計中
+          ? PHASE_TAGS.investigationSpecWriter // 調査中
+          : PHASE_TAGS.specWriter; // 詳細設計中
       case "code-reviewer":
       case "requirement-reviewer":
         return PHASE_TAGS.developer; // 実装中
       default:
         return isInvestigation
-          ? PHASE_TAGS.investigationArchitect
-          : PHASE_TAGS.architect;
+          ? PHASE_TAGS.investigationSpecWriter
+          : PHASE_TAGS.specWriter;
     }
   }
 
   switch (currentRole) {
-    case "architect":
+    case "spec-writer":
+    case "architect" as any:
       return isInvestigation
-        ? PHASE_TAGS.investigationTechLead // 調査レビュー中
-        : PHASE_TAGS.techLead; // 設計レビュー中
-    case "tech-lead":
+        ? PHASE_TAGS.investigationSpecReviewer // 調査レビュー中
+        : PHASE_TAGS.specReviewer; // 設計レビュー中
+    case "spec-reviewer":
+    case "tech-lead" as any:
       return isInvestigation
         ? PHASE_TAGS.investigationCompleted // 調査完了
         : PHASE_TAGS.developer; // 実装中
@@ -247,6 +258,9 @@ export function getNextPhaseTag(
         ? PHASE_TAGS.completed // Fastモード時は code-reviewer 承認で要件レビュー完了（全工程完了）
         : PHASE_TAGS.requirementReviewer; // 要件レビュー中
     case "requirement-reviewer":
+    case "qa" as any:
       return PHASE_TAGS.completed; // 要件レビュー完了
+    default:
+      return PHASE_TAGS.completed;
   }
 }

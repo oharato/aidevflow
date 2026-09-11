@@ -53,7 +53,7 @@ describe("BacklogPoller (プロジェクト走査)", () => {
         issueType: { id: 1, name: "タスク" },
         summary: "設計レビュー待ちチケット",
         description: "リポジトリ: /mock/repo\nレビューお願いします",
-        status: dummyStatuses[2], // 設計レビュー中 -> tech-lead
+        status: dummyStatuses[2], // 設計レビュー中 -> spec-reviewer
         createdUser: { id: 1, name: "ユーザー" },
         created: "2026-09-02T00:00:00Z",
         updated: "2026-09-02T00:00:00Z",
@@ -66,7 +66,7 @@ describe("BacklogPoller (プロジェクト走査)", () => {
         issueType: { id: 1, name: "タスク" },
         summary: "詳細設計待ちチケット",
         description: "リポジトリ: /mock/repo\n設計お願いします",
-        status: dummyStatuses[1], // 詳細設計中 -> architect
+        status: dummyStatuses[1], // 詳細設計中 -> spec-writer
         createdUser: { id: 1, name: "ユーザー" },
         created: "2026-09-03T00:00:00Z",
         updated: "2026-09-03T00:00:00Z",

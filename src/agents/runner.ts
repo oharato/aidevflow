@@ -52,7 +52,7 @@ export class AgyRunner implements IAgentRunner {
 
   async run(role: AgentRole, context: AgentContext): Promise<AgentResult> {
     const prompt = buildAgentPrompt(role, context);
-    const isReview = role === "tech-lead" || role === "code-reviewer" || role === "requirement-reviewer";
+    const isReview = role === "spec-reviewer" || role === "code-reviewer" || role === "requirement-reviewer";
     const selectedModel = (isReview && this.reviewModel) ? this.reviewModel : this.model;
 
     console.log(
@@ -272,11 +272,11 @@ export class MockRunner implements IAgentRunner {
     let isRejection = false;
 
     switch (role) {
-      case "architect":
-        output = `【詳細設計書作成完了】\n- 対象: ${context.issueSummary}\n- 構成案を策定しました。\n次は tech-lead による詳細設計レビューです。`;
+      case "spec-writer":
+        output = `【詳細仕様書作成完了】\n- 対象: ${context.issueSummary}\n- 仕様・構成案を策定しました。\n次は spec-reviewer による詳細仕様レビューです。`;
         break;
-      case "tech-lead":
-        output = `【詳細設計レビュー完了】\n- 設計内容を確認し、問題ありませんでした（LGTM）。\n次は developer による実装です。`;
+      case "spec-reviewer":
+        output = `【詳細仕様レビュー完了】\n- 仕様・設計内容を確認し、問題ありませんでした（LGTM）。\n次は developer による実装です。`;
         break;
       case "developer":
         output = `【実装完了】\n- 設計書に基づいてコードとテストを実装しました。\n次は code-reviewer による技術レビューです。`;

@@ -44,7 +44,7 @@
                │                         │
        ┌───────┴───────┐         ┌───────┴───────┐
        ▼               ▼         ▼               ▼
-  [developer]   [code-reviewer] [architect]  [tech-lead]
+  [developer]   [code-reviewer] [spec-writer] [spec-reviewer]
   (エージェント #1)               (エージェント #2)
        │                                 │
        └──────────────┬──────────────────┘

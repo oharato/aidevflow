@@ -160,7 +160,7 @@ describe("差し戻し無限ループ防止 & 人間確認エスカレーショ�
 
     const designIssue: BacklogIssue = {
       ...baseIssue,
-      status: dummyStatuses[1], // 詳細設計中 (architect)
+      status: dummyStatuses[1], // 詳細設計中 (spec-writer)
     };
 
     const res = await dispatcher.processIssue(designIssue, dummyStatuses);
