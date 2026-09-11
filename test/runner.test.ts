@@ -27,7 +27,7 @@ vi.mock("child_process", () => ({
   }),
 }));
 
-import { AgyRunner, TokenUsageTracker } from "../src/agents/runner.js";
+import { AgyRunner, TokenUsageTracker, parseAgyUsageJson } from "../src/agents/runner.js";
 
 describe("AgyRunner モデル・エフォート指定", () => {
   it("モデル名に -high, -medium, -low が含まれる場合、--effort フラグを付与しないこと (コンフリクト防止)", async () => {
@@ -139,5 +139,71 @@ describe("TokenUsageTracker", () => {
     TokenUsageTracker.reset();
     expect(TokenUsageTracker.getTotals().sessionCount).toBe(0);
     expect(TokenUsageTracker.getTotals().totalTokens).toBe(0);
+  });
+});
+
+describe("parseAgyUsageJson (/usage JSON パース)", () => {
+  it("agy -p '/usage' --output-format json の構造化データを正しくパースできること", () => {
+    const rawJson = JSON.stringify({
+      status: "SUCCESS",
+      command: {
+        name: "usage",
+        data: {
+          groups: [
+            {
+              name: "Gemini Models",
+              buckets: [
+                {
+                  id: "gemini-weekly",
+                  name: "Weekly Limit Remaining",
+                  window: "weekly",
+                  remaining_fraction: 0.81,
+                  reset_time: "2026-09-17T22:36:55Z",
+                },
+                {
+                  id: "gemini-5h",
+                  name: "Five Hour Limit Remaining",
+                  window: "5h",
+                  remaining_fraction: 0.85,
+                  reset_time: "2026-09-12T04:26:23Z",
+                },
+              ],
+            },
+            {
+              name: "Claude and GPT models",
+              buckets: [
+                {
+                  id: "3p-weekly",
+                  name: "Weekly Limit Remaining",
+                  window: "weekly",
+                  remaining_fraction: 1.0,
+                  reset_time: "2026-09-18T23:41:34Z",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    const parsed = parseAgyUsageJson(rawJson);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.groups.length).toBe(2);
+
+    const gemini = parsed?.groups[0];
+    expect(gemini?.name).toBe("Gemini Models");
+    expect(gemini?.buckets.length).toBe(2);
+    expect(gemini?.buckets[0].remainingPercentage).toBe(81);
+    expect(gemini?.buckets[0].resetTime).toBe("2026-09-17T22:36:55Z");
+    expect(gemini?.buckets[1].remainingPercentage).toBe(85);
+
+    expect(parsed?.summaryText).toContain("Gemini Models (Weekly Limit Remaining: 81%, Five Hour Limit Remaining: 85%)");
+    expect(parsed?.summaryText).toContain("Claude and GPT models (Weekly Limit Remaining: 100%)");
+  });
+
+  it("不正な JSON や空文字の場合は null を返すこと", () => {
+    expect(parseAgyUsageJson("")).toBeNull();
+    expect(parseAgyUsageJson("not a json")).toBeNull();
+    expect(parseAgyUsageJson("{}")).toBeNull();
   });
 });

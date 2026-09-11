@@ -7,9 +7,49 @@ import type {
   QuotaProbeResult,
   AgentTokenUsage,
   CumulativeTokenStats,
+  QuotaUsageInfo,
+  QuotaGroupInfo,
+  QuotaBucketInfo,
 } from "./types.js";
 import { buildAgentPrompt } from "./prompts.js";
 import { parseResetDuration } from "../daemon/quota-lock.js";
+
+/**
+ * agy -p "/usage" --output-format json の出力をパースして構造化する
+ */
+export function parseAgyUsageJson(jsonStr: string): QuotaUsageInfo | null {
+  try {
+    const data = JSON.parse(jsonStr);
+    const groupsRaw = data.command?.data?.groups;
+    if (!Array.isArray(groupsRaw)) return null;
+
+    const groups: QuotaGroupInfo[] = groupsRaw.map((g: any) => ({
+      name: g.name || "Unknown",
+      buckets: (g.buckets || []).map((b: any) => ({
+        id: b.id || "",
+        name: b.name || "",
+        window: b.window || "",
+        remainingFraction: typeof b.remaining_fraction === "number" ? b.remaining_fraction : 1,
+        remainingPercentage: Math.round((typeof b.remaining_fraction === "number" ? b.remaining_fraction : 1) * 100),
+        resetTime: b.reset_time || "",
+      })),
+    }));
+
+    const summaryParts: string[] = [];
+    for (const g of groups) {
+      const bucketSummaries = g.buckets.map((b) => `${b.name || b.window}: ${b.remainingPercentage}%`).join(", ");
+      summaryParts.push(`${g.name} (${bucketSummaries})`);
+    }
+    const summaryText = summaryParts.join(" | ");
+
+    return {
+      groups,
+      summaryText,
+    };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * プロセス全体でのトークン使用量をスレッドセーフに集計・追跡するトラッカー
@@ -279,8 +319,91 @@ export class AgyRunner implements IAgentRunner {
     });
   }
 
+  /**
+   * agy -p "/usage" --output-format json により、トークン消費ゼロで現在のクォータ残量（%）とリセット日時を取得
+   */
+  async getQuotaUsage(): Promise<QuotaUsageInfo | null> {
+    return new Promise<QuotaUsageInfo | null>((resolve) => {
+      const child = spawn(
+        "agy",
+        ["-p", "/usage", "--output-format", "json", "--print-timeout", "30s"],
+        {
+          cwd: this.workDir,
+          env: { ...process.env },
+          stdio: ["ignore", "pipe", "pipe"],
+        }
+      );
+
+      let stdout = "";
+      child.stdout.on("data", (data) => {
+        stdout += data.toString();
+      });
+
+      child.on("close", (code) => {
+        if (code === 0 && stdout) {
+          const parsed = parseAgyUsageJson(stdout);
+          resolve(parsed);
+        } else {
+          resolve(null);
+        }
+      });
+
+      child.on("error", () => {
+        resolve(null);
+      });
+    });
+  }
+
   async probeQuotaRecovery(): Promise<QuotaProbeResult> {
-    console.log("[AgyRunner] クォータ回復プローブを実行中 (agy 軽量チェック)...");
+    console.log("[AgyRunner] クォータ回復プローブを実行中 (agy /usage による残量・リセット確認)...");
+    try {
+      const quotaInfo = await this.getQuotaUsage();
+      if (quotaInfo && quotaInfo.groups.length > 0) {
+        let isDepleted = false;
+        let resetDurationSec: number | null = null;
+        let resetDurationText: string | undefined = undefined;
+        let depletedBucketName = "";
+
+        for (const group of quotaInfo.groups) {
+          for (const bucket of group.buckets) {
+            if (bucket.remainingFraction <= 0) {
+              isDepleted = true;
+              depletedBucketName = `${group.name} - ${bucket.name}`;
+              if (bucket.resetTime) {
+                const diffMs = new Date(bucket.resetTime).getTime() - Date.now();
+                if (diffMs > 0) {
+                  resetDurationSec = Math.ceil(diffMs / 1000);
+                  const mins = Math.ceil(diffMs / 60000);
+                  resetDurationText = `${mins}分後`;
+                }
+              }
+            }
+          }
+        }
+
+        if (isDepleted) {
+          console.log(`[AgyRunner] ⚠️ クォータ残量不足検知: ${depletedBucketName} (残量: 0%)`);
+          return {
+            recovered: false,
+            resetDurationSec,
+            resetDurationText,
+            errorMessage: `クォータ上限到達中: ${depletedBucketName}`,
+            quotaUsage: quotaInfo,
+          };
+        }
+
+        console.log(`[AgyRunner] 🎉 クォータ残量を確認 (回復済み): ${quotaInfo.summaryText}`);
+        return {
+          recovered: true,
+          quotaUsage: quotaInfo,
+        };
+      }
+    } catch (err: any) {
+      console.warn(`[AgyRunner] /usage によるクォータ確認で例外: ${err.message}。ping フォールバックを実行します。`);
+    }
+
+    // フォールバック: 従来の軽量 ping チェック
+    console.log("[AgyRunner] (フォールバック) agy ping チェックを実行します...");
     return new Promise<QuotaProbeResult>((resolve) => {
       const child = spawn("agy", ["-p", "ping", "--dangerously-skip-permissions", "--print-timeout", "30s", "--output-format", "text"], {
         cwd: this.workDir,

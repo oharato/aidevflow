@@ -139,8 +139,9 @@ flowchart TD
    - 他のチケットを巻き込んでクォータエラーにする事故を根本から防止。
 
 3. **クォータ回復プローブ (`probeQuotaRecovery`)**:
-   - リセット時刻が到来した際、または設定されたプローブ間隔（`QUOTA_PROBE_INTERVAL_SEC`、デフォルト 300秒 = 5分）ごとに超軽量ワンショット（`agy -p "ping"` 等）を実行。
-   - 終了コード 0 かつクォータエラーなしを確認して回復を判定。
+   - リセット時刻が到来した際、または設定されたプローブ間隔（`QUOTA_PROBE_INTERVAL_SEC`、デフォルト 300秒 = 5分）ごとに、**トークン消費ゼロ** の `agy -p "/usage" --output-format json` を実行。
+   - `command.data.groups` の `remaining_fraction` および `reset_time` を直接構造化解析し、クォータが回復しているか（残量率 > 0%）を判定。
+   - LLM 推論プロンプトを一切投げないため、回復チェック自体によるクォータ消費をゼロに抑えられます（※万が一古いバージョン等で非対応の場合は従来の軽量 ping に安全にフォールバック）。
 
 4. **全自動再開 (Auto-Resume)**:
    - クォータ回復を検知すると、ロックファイルを自動削除。
@@ -170,7 +171,14 @@ flowchart TD
   - Antigravity CLI (`agy`) の `stream-json` 出力に含まれる `result.usage` を自動解析。
   - プロセス常駐メモリ（`TokenUsageTracker`）にて、チケット並行開発下でもスレッドセーフに累積トークン数を加算集計。
 
-### ② ログおよび Backlog コメントへの出力形式
+### ② クォータ残量率（%）のリアルタイム取得 (`agy -p "/usage" --output-format json`)
+- **トークン消費ゼロでの残量把握**:
+  - `agy -p "/usage" --output-format json` を呼び出すことで、プロンプト推論を行わず（トークン消費 0）に、`Gemini Models`（5時間枠・週枠）や `Claude/GPT` の正確な残量率（`remaining_fraction`）およびリセット日時（`reset_time`）を取得。
+- **全工程完了コメントへの掲載**:
+  - 全工程完了時、Backlog コメントに現在の残量率を併記（例: `- **現在のクォータ残量**: Gemini Models (Weekly Limit Remaining: 81%, Five Hour Limit Remaining: 85%) | Claude and GPT models (Weekly Limit Remaining: 100%)`）。
+  - 人間が次のチケットを着手させるべきか、リセットを待つべきかの判断が即座に可能。
+
+### ③ ログおよび Backlog コメントへの出力形式
 1. **コンソール標準出力**:
    ```
    [AgyRunner] code-reviewer エージェント終了 (終了コード: 0, 所要時間: 42秒)
@@ -181,7 +189,7 @@ flowchart TD
    - イベント `agent_finish` に `usage` および `cumulativeTokens` を記録。
 3. **Backlog コメント**:
    - 各フェーズの処理報告に `**トークン消費量**: 入力: X / 出力: Y (思考: Z) / 合計: W tokens` を記載。
-   - 全工程完了時には最終フェーズ消費トークンに加え、`累計トークン消費 (全セッション計)` を明記。
+   - 全工程完了時には最終フェーズ消費トークンに加え、`累計トークン消費 (全セッション計)` および `現在のクォータ残量` を明記。
 4. **クォータ待機ログへの残量・リセット時間表示**:
    - クォータ枯渇時、残りのリセット待機時間および直前までの累積トークン消費量を明示：
    ```

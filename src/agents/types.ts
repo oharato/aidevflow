@@ -27,6 +27,25 @@ export interface CumulativeTokenStats {
   totalTokens: number;
 }
 
+export interface QuotaBucketInfo {
+  id: string;
+  name: string;
+  window: string;
+  remainingFraction: number;
+  remainingPercentage: number;
+  resetTime: string;
+}
+
+export interface QuotaGroupInfo {
+  name: string;
+  buckets: QuotaBucketInfo[];
+}
+
+export interface QuotaUsageInfo {
+  groups: QuotaGroupInfo[];
+  summaryText: string;
+}
+
 export interface AgentResult {
   role: AgentRole;
   success: boolean;
@@ -36,6 +55,7 @@ export interface AgentResult {
   output: string;
   usage?: AgentTokenUsage;
   durationSeconds?: number;
+  quotaUsage?: QuotaUsageInfo;
 }
 
 export interface QuotaProbeResult {
@@ -43,9 +63,11 @@ export interface QuotaProbeResult {
   resetDurationSec?: number | null;
   resetDurationText?: string;
   errorMessage?: string;
+  quotaUsage?: QuotaUsageInfo;
 }
 
 export interface IAgentRunner {
   run(role: AgentRole, context: AgentContext): Promise<AgentResult>;
   probeQuotaRecovery?(): Promise<QuotaProbeResult>;
+  getQuotaUsage?(): Promise<QuotaUsageInfo | null>;
 }

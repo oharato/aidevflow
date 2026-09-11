@@ -792,6 +792,18 @@ export class AgentDispatcher {
           ? "#### 統合レビュー報告:"
           : "#### 最終要件レビュー報告:";
 
+        let quotaRemainingText: string | null = null;
+        if (typeof this.runner.getQuotaUsage === "function") {
+          try {
+            const quotaUsage = await this.runner.getQuotaUsage();
+            if (quotaUsage?.summaryText) {
+              quotaRemainingText = `- **現在のクォータ残量**: ${quotaUsage.summaryText}`;
+            }
+          } catch {
+            // クォータ取得失敗時はスキップ
+          }
+        }
+
         commentLines.push(
           `### 【レビュー依頼】AIエージェントによる全工程が完了しました`,
           ``,
@@ -814,6 +826,7 @@ export class AgentDispatcher {
                 `- **累計トークン消費 (全セッション計)**: ${TokenUsageTracker.getTotals().totalTokens.toLocaleString()} tokens (${TokenUsageTracker.getTotals().sessionCount}回実行)`,
               ]
             : []),
+          ...(quotaRemainingText ? [quotaRemainingText] : []),
           ``,
           reviewReportTitle,
           result.output,
