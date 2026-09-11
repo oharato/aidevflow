@@ -94,7 +94,7 @@ describe("差し戻し無限ループ防止 & 人間確認エスカレーショ�
     issueType: { id: 1, name: "タスク" },
     summary: "決済APIリファクタリング",
     description: "リポジトリ: /mock/payment-service\n決済モジュールの設計と実装",
-    status: dummyStatuses[4], // 技術レビュー中 (critic)
+    status: dummyStatuses[4], // 技術レビュー中 (code-reviewer)
     createdUser: { id: 1, name: "ユーザー" },
     created: "2026-09-09T00:00:00Z",
     updated: "2026-09-09T00:00:00Z",
@@ -160,7 +160,7 @@ describe("差し戻し無限ループ防止 & 人間確認エスカレーショ�
 
     const designIssue: BacklogIssue = {
       ...baseIssue,
-      status: dummyStatuses[1], // 詳細設計中 (director)
+      status: dummyStatuses[1], // 詳細設計中 (architect)
     };
 
     const res = await dispatcher.processIssue(designIssue, dummyStatuses);
@@ -268,7 +268,7 @@ describe("差し戻し無限ループ防止 & 人間確認エスカレーショ�
     // 人間が「実装中」に変更
     currentIssueState = {
       ...baseIssue,
-      status: dummyStatuses[3], // 実装中 (artist)
+      status: dummyStatuses[3], // 実装中 (developer)
     };
 
     runner.setHandler(() => ({
@@ -300,10 +300,10 @@ describe("差し戻し無限ループ防止 & 人間確認エスカレーショ�
     expect(checkIsRejection("差し戻し事項はありません。承認します。")).toBe(false);
     expect(checkIsRejection("差し戻し: なし")).toBe(false);
     expect(checkIsRejection("リジェクト不要（LGTM）")).toBe(false);
-    expect(checkIsRejection("バグがあるためartistへ差し戻します。")).toBe(true);
+    expect(checkIsRejection("バグがあるためdeveloperへ差し戻します。")).toBe(true);
 
     // 3. STUDY-3 で発生した実際のエージェント出力（否定文脈のCONFIRM_HUMANを含むLGTM）での動作検証
-    const actualEditorOutput = `### 5. 結論
+    const actualQaOutput = `### 5. 結論
 本課題（STUDY-3）の要件定義に基づく全機能が完全に実装され、技術的・要件的観点の双方において基準をクリアしています。人間の判断を要するエスカレーション事項（CONFIRM_HUMAN）もございません。
 **要件観点LGTM（全工程完了）** とし、本タスクの完了を承認します。プルリクエストのベースブランチへのマージが可能な状態です。`;
 
@@ -311,7 +311,7 @@ describe("差し戻し無限ループ防止 & 人間確認エスカレーショ�
       success: true,
       isRejection: false,
       summary: "要件レビュー完了",
-      output: actualEditorOutput,
+      output: actualQaOutput,
     }));
 
     const dispatcher = new AgentDispatcher(
@@ -325,27 +325,27 @@ describe("差し戻し無限ループ防止 & 人間確認エスカレーショ�
       3
     );
 
-    const editorIssue: BacklogIssue = {
+    const qaIssue: BacklogIssue = {
       ...baseIssue,
-      status: dummyStatuses[5], // 要件レビュー中 (editor)
+      status: dummyStatuses[5], // 要件レビュー中 (qa)
     };
 
-    const res = await dispatcher.processIssue(editorIssue, dummyStatuses);
+    const res = await dispatcher.processIssue(qaIssue, dummyStatuses);
     expect(res.isEscalation).toBe(false);
     expect(res.nextStatusTarget).toBe("完了");
   });
 
   it("エージェント実行がQuota上限エラーで失敗した際、次フェーズへ進まず「確認待ち」へ安全に一時停止すること", async () => {
-    const quotaErrorOutput = `[エラー] エージェント [critic] が異常終了またはタイムアウトしました (終了コード: 1)。
+    const quotaErrorOutput = `[エラー] エージェント [code-reviewer] が異常終了またはタイムアウトしました (終了コード: 1)。
 直前のツール実行: なし
 エラー詳細:
 error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h21m6s.`;
 
     const runner = new MockCustomRunner(() => ({
-      role: "critic",
+      role: "code-reviewer",
       success: false,
       isRejection: false,
-      summary: "エージェント [critic] が実行されました (終了コード: 1)",
+      summary: "エージェント [code-reviewer] が実行されました (終了コード: 1)",
       output: quotaErrorOutput,
     }));
 
@@ -360,12 +360,12 @@ error: Individual quota reached. Please upgrade your subscription to increase yo
       3
     );
 
-    const criticIssue: BacklogIssue = {
+    const codeReviewerIssue: BacklogIssue = {
       ...baseIssue,
-      status: dummyStatuses[4], // 技術レビュー中 (critic)
+      status: dummyStatuses[4], // 技術レビュー中 (code-reviewer)
     };
 
-    const res = await dispatcher.processIssue(criticIssue, dummyStatuses);
+    const res = await dispatcher.processIssue(codeReviewerIssue, dummyStatuses);
     expect(res.isEscalation).toBe(true);
     expect(res.nextStatusTarget).toBe("確認待ち");
     expect(lastUpdatedStatusId).toBe(7); // 確認待ち
@@ -374,16 +374,16 @@ error: Individual quota reached. Please upgrade your subscription to increase yo
     expect(lastPostedComment).toContain("Individual quota reached");
   });
 
-  it("最終工程のEditor実行が失敗した際、完了（isFinalApproval）にならず安全に一時停止すること", async () => {
-    const quotaErrorOutput = `[エラー] エージェント [editor] が異常終了またはタイムアウトしました (終了コード: 1)。
+  it("最終工程のQA実行が失敗した際、完了（isFinalApproval）にならず安全に一時停止すること", async () => {
+    const quotaErrorOutput = `[エラー] エージェント [qa] が異常終了またはタイムアウトしました (終了コード: 1)。
 エラー詳細:
 error: Individual quota reached. Resets in 1h59m24s.`;
 
     const runner = new MockCustomRunner(() => ({
-      role: "editor",
+      role: "qa",
       success: false,
       isRejection: false,
-      summary: "エージェント [editor] が実行されました (終了コード: 1)",
+      summary: "エージェント [qa] が実行されました (終了コード: 1)",
       output: quotaErrorOutput,
     }));
 
@@ -398,12 +398,12 @@ error: Individual quota reached. Resets in 1h59m24s.`;
       3
     );
 
-    const editorIssue: BacklogIssue = {
+    const qaIssue: BacklogIssue = {
       ...baseIssue,
-      status: dummyStatuses[5], // 要件レビュー中 (editor)
+      status: dummyStatuses[5], // 要件レビュー中 (qa)
     };
 
-    const res = await dispatcher.processIssue(editorIssue, dummyStatuses);
+    const res = await dispatcher.processIssue(qaIssue, dummyStatuses);
     expect(res.isEscalation).toBe(true);
     expect(res.nextStatusTarget).toBe("確認待ち");
     expect(lastUpdatedStatusId).toBe(7); // 確認待ち (完了の8にならない)

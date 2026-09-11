@@ -132,17 +132,17 @@ export class AgentDispatcher {
         return null;
       }
       // 人間が回答してステータスを「処理中」に変更した場合は再開
-      // 直前のロールがあればそれを再開ロールとし、なければデフォルト "director"
-      return this.lastRoleMap.get(issue.issueKey) || "director";
+      // 直前のロールがあればそれを再開ロールとし、なければデフォルト "architect"
+      return this.lastRoleMap.get(issue.issueKey) || "architect";
     }
 
     // [要件レビュー完了] または [調査完了] の場合:
     if (parsed.isCompleted) {
       // 人間がレビュー後に差し戻してステータスを「処理中」に変更した場合:
-      // 調査タスクなら再調査・設計修正 (director)、実装タスクなら実装修正 (artist) を再開
+      // 調査タスクなら再調査・設計修正 (architect)、実装タスクなら実装修正 (developer) を再開
       if (statusName.includes("処理中")) {
         const isInvestigation = isInvestigationIssue(issue);
-        return isInvestigation ? "director" : "artist";
+        return isInvestigation ? "architect" : "developer";
       }
       return null;
     }
@@ -152,10 +152,10 @@ export class AgentDispatcher {
     }
 
     // タグがなく「処理中」になっている場合:
-    // Fastモードなら初期ロールは artist (実装)、それ以外は director (詳細設計)
+    // Fastモードなら初期ロールは developer (実装)、それ以外は architect (詳細設計)
     if (statusName.includes("処理中")) {
       const isFast = isFastModeIssue(issue);
-      return isFast ? "artist" : "director";
+      return isFast ? "developer" : "architect";
     }
 
     return null;
@@ -164,29 +164,29 @@ export class AgentDispatcher {
   resolveRoleFromStatus(statusName: string): AgentRole | null {
     const s = statusName.toLowerCase();
 
-    // 1. 詳細設計 / 調査 (director)
-    if (s.includes("詳細設計") || s.includes("設計中") || s.includes("調査中") || s.includes("director")) {
-      return "director";
+    // 1. 詳細設計 / 調査 (architect)
+    if (s.includes("詳細設計") || s.includes("設計中") || s.includes("調査中") || s.includes("architect") || s.includes("director")) {
+      return "architect";
     }
 
-    // 2. 詳細設計レビュー / 調査レビュー (curator)
-    if (s.includes("設計レビュー") || s.includes("調査レビュー") || s.includes("curator")) {
-      return "curator";
+    // 2. 詳細設計レビュー / 調査レビュー (tech-lead)
+    if (s.includes("設計レビュー") || s.includes("調査レビュー") || s.includes("tech-lead") || s.includes("curator")) {
+      return "tech-lead";
     }
 
-    // 3. 実装 (artist)
-    if (s.includes("実装") || s.includes("artist")) {
-      return "artist";
+    // 3. 実装 (developer)
+    if (s.includes("実装") || s.includes("developer") || s.includes("artist")) {
+      return "developer";
     }
 
-    // 4. 技術的観点レビュー (critic)
-    if (s.includes("技術レビュー") || s.includes("critic")) {
-      return "critic";
+    // 4. 技術的観点レビュー (code-reviewer)
+    if (s.includes("技術レビュー") || s.includes("code-reviewer") || s.includes("critic")) {
+      return "code-reviewer";
     }
 
-    // 5. 要件的観点レビュー (editor)
-    if (s.includes("要件レビュー") || s.includes("editor")) {
-      return "editor";
+    // 5. 要件的観点レビュー (qa)
+    if (s.includes("要件レビュー") || s.includes("qa") || s.includes("editor")) {
+      return "qa";
     }
 
     return null;
@@ -200,10 +200,10 @@ export class AgentDispatcher {
   ): string {
     if (isRejection) {
       switch (currentRole) {
-        case "curator":
+        case "tech-lead":
           return "詳細設計";
-        case "critic":
-        case "editor":
+        case "code-reviewer":
+        case "qa":
           return "実装";
         default:
           return "未対応";
@@ -211,15 +211,15 @@ export class AgentDispatcher {
     }
 
     switch (currentRole) {
-      case "director":
+      case "architect":
         return "設計レビュー";
-      case "curator":
+      case "tech-lead":
         return isInvestigation ? "完了" : "実装";
-      case "artist":
+      case "developer":
         return "技術レビュー";
-      case "critic":
+      case "code-reviewer":
         return isFastMode ? "完了" : "要件レビュー";
-      case "editor":
+      case "qa":
         return "完了";
     }
   }
@@ -456,15 +456,15 @@ export class AgentDispatcher {
       }
     }
 
-    // 5. GitHub PR の一括作成 / 取得 (Artist 実装完了時、最終 Editor フェーズ、Fast モード Critic、または調査タスクのフェーズ)
+    // 5. GitHub PR の一括作成 / 取得 (Developer 実装完了時、最終 QA フェーズ、Fast モード Code-Reviewer、または調査タスクのフェーズ)
     let prResults: PullRequestResult[] = [];
     const shouldEnsurePr =
       result.success &&
       !result.isRejection &&
-      (role === "artist" ||
-        role === "editor" ||
-        (isFastMode && role === "critic") ||
-        (isInvestigation && (role === "director" || role === "curator")));
+      (role === "developer" ||
+        role === "qa" ||
+        (isFastMode && role === "code-reviewer") ||
+        (isInvestigation && (role === "architect" || role === "tech-lead")));
 
     if (shouldEnsurePr) {
       console.log(`[Dispatcher] GitHub プルリクエストを準備中 (${worktreeTargets.length}リポジトリ)...`);
@@ -534,7 +534,7 @@ export class AgentDispatcher {
       result.success &&
       !result.isRejection &&
       !isEscalation &&
-      (isInvestigation ? role === "curator" : (isFastMode ? role === "critic" : role === "editor"));
+      (isInvestigation ? role === "tech-lead" : (isFastMode ? role === "code-reviewer" : role === "qa"));
     const isCustom = this.isCustomStatusMode(projectStatuses);
 
     if (isCustom) {
@@ -593,10 +593,10 @@ export class AgentDispatcher {
       } else if (currentRejectionCount >= this.maxRejectionCount) {
         // 差し戻し上限によるエスカレーション時は修正担当ロールへ戻す
         resumeRole =
-          role === "curator"
-            ? "director"
-            : role === "critic" || role === "editor"
-            ? "artist"
+          role === "tech-lead"
+            ? "architect"
+            : role === "code-reviewer" || role === "qa"
+            ? "developer"
             : role;
       } else {
         // エージェントからの質問・確認要請の場合は同一ロールで回答を受け取る
@@ -654,7 +654,7 @@ export class AgentDispatcher {
         commentLines.push(
           `### 【調査完了報告】AIエージェントによる調査・設計フェーズが完了しました`,
           ``,
-          `チケット **${issue.issueKey}: ${newSummary || issue.summary}** に対する調査・検討・設計工程（director 調査・設計 → curator 調査・設計レビュー）が完了しました。`,
+          `チケット **${issue.issueKey}: ${newSummary || issue.summary}** に対する調査・検討・設計工程（architect 調査・設計 → tech-lead 調査・設計レビュー）が完了しました。`,
           ``,
           ...prSectionLines,
           `- **ブランチ**: \`${issue.issueKey}\``,
@@ -675,7 +675,7 @@ export class AgentDispatcher {
           `- **【追加調査やドキュメント修正を依頼する場合 (AIに再調査させる)】**:`,
           `  1. 本チケットのコメント欄に追加の論点や指示（「〜についてもドキュメントに追記して」等）を記入してください。`,
           `  2. ステータスを **「処理中」** に変更してください。`,
-          `     - デーモンがコメントを検知し、自動的に \`director\`（調査・設計）が再調査・ドキュメント修正を行います。`
+          `     - デーモンがコメントを検知し、自動的に \`architect\`（調査・設計）が再調査・ドキュメント修正を行います。`
         );
       } else {
         const verificationGuide = this.generateVerificationGuide(
@@ -716,7 +716,7 @@ export class AgentDispatcher {
           `- **【修正が必要な場合 (AIに再修正させる)】**:`,
           `  1. 本チケットのコメント欄に修正指示・指摘を記入してください（PRへのコメント参照でも可）。`,
           `  2. ステータスを **「処理中」** に変更してください。`,
-          `     - デーモンがコメントを検知し、自動的に \`artist\`（実装）が修正コミットを作成して PR に追記 push します。`,
+          `     - デーモンがコメントを検知し、自動的に \`developer\`（実装）が修正コミットを作成して PR に追記 push します。`,
           `     - （※設計からの抜本的な見直しを行いたい場合は、件名を \`[詳細設計中]\` に変更してください）`,
           `- **【問題なく完了・マージする場合】**:`,
           `  1. GitHub 上でプルリクエストをマージしてください。`,

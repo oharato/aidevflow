@@ -3,17 +3,17 @@ import type { BacklogStatus } from "./types.js";
 
 // フェーズとプレフィックス名のマッピング
 export const PHASE_TAGS = {
-  director: "詳細設計中",
-  curator: "設計レビュー中",
-  artist: "実装中",
-  critic: "技術レビュー中",
-  editor: "要件レビュー中",
+  architect: "詳細設計中",
+  techLead: "設計レビュー中",
+  developer: "実装中",
+  codeReviewer: "技術レビュー中",
+  qa: "要件レビュー中",
   confirmHuman: "確認待ち",
   completed: "要件レビュー完了",
 
   // 調査・検討タスク用フェーズタグ
-  investigationDirector: "調査中",
-  investigationCurator: "調査レビュー中",
+  investigationArchitect: "調査中",
+  investigationTechLead: "調査レビュー中",
   investigationCompleted: "調査完了",
 } as const;
 
@@ -174,18 +174,18 @@ export function parsePhaseFromSummary(summary: string): {
   const tag = match[1];
 
   switch (tag) {
-    case PHASE_TAGS.investigationDirector:
-    case PHASE_TAGS.director:
-      return { role: "director", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
-    case PHASE_TAGS.investigationCurator:
-    case PHASE_TAGS.curator:
-      return { role: "curator", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
-    case PHASE_TAGS.artist:
-      return { role: "artist", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
-    case PHASE_TAGS.critic:
-      return { role: "critic", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
-    case PHASE_TAGS.editor:
-      return { role: "editor", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
+    case PHASE_TAGS.investigationArchitect:
+    case PHASE_TAGS.architect:
+      return { role: "architect", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
+    case PHASE_TAGS.investigationTechLead:
+    case PHASE_TAGS.techLead:
+      return { role: "tech-lead", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
+    case PHASE_TAGS.developer:
+      return { role: "developer", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
+    case PHASE_TAGS.codeReviewer:
+      return { role: "code-reviewer", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
+    case PHASE_TAGS.qa:
+      return { role: "qa", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
     case PHASE_TAGS.confirmHuman:
       return { role: null, isWaitingConfirmation: true, isCompleted: false, tag, cleanSummary };
     case PHASE_TAGS.investigationCompleted:
@@ -215,36 +215,36 @@ export function getNextPhaseTag(
 ): string {
   if (isRejection) {
     switch (currentRole) {
-      case "curator":
+      case "tech-lead":
         return isInvestigation
-          ? PHASE_TAGS.investigationDirector // 調査中
-          : PHASE_TAGS.director; // 詳細設計中
-      case "critic":
-      case "editor":
-        return PHASE_TAGS.artist; // 実装中
+          ? PHASE_TAGS.investigationArchitect // 調査中
+          : PHASE_TAGS.architect; // 詳細設計中
+      case "code-reviewer":
+      case "qa":
+        return PHASE_TAGS.developer; // 実装中
       default:
         return isInvestigation
-          ? PHASE_TAGS.investigationDirector
-          : PHASE_TAGS.director;
+          ? PHASE_TAGS.investigationArchitect
+          : PHASE_TAGS.architect;
     }
   }
 
   switch (currentRole) {
-    case "director":
+    case "architect":
       return isInvestigation
-        ? PHASE_TAGS.investigationCurator // 調査レビュー中
-        : PHASE_TAGS.curator; // 設計レビュー中
-    case "curator":
+        ? PHASE_TAGS.investigationTechLead // 調査レビュー中
+        : PHASE_TAGS.techLead; // 設計レビュー中
+    case "tech-lead":
       return isInvestigation
         ? PHASE_TAGS.investigationCompleted // 調査完了
-        : PHASE_TAGS.artist; // 実装中
-    case "artist":
-      return PHASE_TAGS.critic; // 技術レビュー中
-    case "critic":
+        : PHASE_TAGS.developer; // 実装中
+    case "developer":
+      return PHASE_TAGS.codeReviewer; // 技術レビュー中
+    case "code-reviewer":
       return isFastMode
-        ? PHASE_TAGS.completed // Fastモード時は critic 承認で要件レビュー完了（全工程完了）
-        : PHASE_TAGS.editor; // 要件レビュー中
-    case "editor":
+        ? PHASE_TAGS.completed // Fastモード時は code-reviewer 承認で要件レビュー完了（全工程完了）
+        : PHASE_TAGS.qa; // 要件レビュー中
+    case "qa":
       return PHASE_TAGS.completed; // 要件レビュー完了
   }
 }

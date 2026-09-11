@@ -123,8 +123,8 @@ describe("調査タスク（実装を伴わない調査・検討・設計パイ�
   });
 
   describe("調査タスクのプロンプト生成", () => {
-    it("isInvestigation: true の場合、director と curator に調査専用のプロンプトが生成されること", () => {
-      const dirPrompt = buildAgentPrompt("director", {
+    it("isInvestigation: true の場合、architect と tech-lead に調査専用のプロンプトが生成されること", () => {
+      const dirPrompt = buildAgentPrompt("architect", {
         issueKey: "STUDY-20",
         issueSummary: "[調査] ベクトルDB選定",
         issueDescription: "pgvector と Qdrant の比較",
@@ -137,9 +137,9 @@ describe("調査タスク（実装を伴わない調査・検討・設計パイ�
       expect(dirPrompt).toContain("本タスクは【調査・検討・設計タスク】です。");
       expect(dirPrompt).toContain("リポジトリ内のファイル（ドキュメント、設定、検証コード等）を積極的に作成・編集・修正してください。");
       expect(dirPrompt).toContain("docs/investigation_report.md");
-      expect(dirPrompt).toContain("次は curator による調査・設計レビューです");
+      expect(dirPrompt).toContain("次は tech-lead による調査・設計レビューです");
 
-      const curPrompt = buildAgentPrompt("curator", {
+      const curPrompt = buildAgentPrompt("tech-lead", {
         issueKey: "STUDY-20",
         issueSummary: "[調査] ベクトルDB選定",
         issueDescription: "pgvector と Qdrant の比較",
@@ -151,11 +151,11 @@ describe("調査タスク（実装を伴わない調査・検討・設計パイ�
       expect(curPrompt).toContain("本タスクは【調査・検討・設計タスク】です。");
       expect(curPrompt).toContain("リポジトリ内のドキュメントや変更差分（git diff 等）を確認し");
       expect(curPrompt).toContain("次は全工程完了（調査完了）です");
-      expect(curPrompt).toContain("※本タスクは調査タスクのため、artistによる本番コード実装へは進みません");
+      expect(curPrompt).toContain("※本タスクは調査タスクのため、developerによる本番コード実装へは進みません");
     });
 
-    it("通常のdirectorタスクでも「リポジトリにドキュメント残して」等の指示に対応するプロンプトが含まれること", () => {
-      const normalDirPrompt = buildAgentPrompt("director", {
+    it("通常のarchitectタスクでも「リポジトリにドキュメント残して」等の指示に対応するプロンプトが含まれること", () => {
+      const normalDirPrompt = buildAgentPrompt("architect", {
         issueKey: "STUDY-30",
         issueSummary: "検索機能の改善",
         issueDescription: "リポジトリにドキュメント残して",
@@ -184,32 +184,32 @@ describe("調査タスク（実装を伴わない調査・検討・設計パイ�
       updated: "2026-09-10T00:00:00Z",
     };
 
-    it("1. 初期着手: director が実行され、[調査レビュー中] かつ処理中(2)に更新されること", async () => {
+    it("1. 初期着手: architect が実行され、[調査レビュー中] かつ処理中(2)に更新されること", async () => {
       const runner = new MockCustomRunner(() => ({
         success: true,
         isRejection: false,
         summary: "調査報告書作成完了",
-        output: "docs/investigation_report.md に調査結果をまとめコミットしました。次は curator による調査・設計レビューです。",
+        output: "docs/investigation_report.md に調査結果をまとめコミットしました。次は tech-lead による調査・設計レビューです。",
       }));
 
       const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/search-service", false, logger, mockWorktreeManager, mockGitHubService, 3);
 
-      expect(dispatcher.resolveRole(investigationIssue, standardStatuses)).toBe("director");
+      expect(dispatcher.resolveRole(investigationIssue, standardStatuses)).toBe("architect");
 
       const res = await dispatcher.processIssue(investigationIssue, standardStatuses);
 
-      expect(res.nextStatusTarget).toBe(`[${PHASE_TAGS.investigationCurator}]`);
+      expect(res.nextStatusTarget).toBe(`[${PHASE_TAGS.investigationTechLead}]`);
       expect(res.newSummary).toBe("[調査レビュー中] [調査] ベクトルDBの比較選定");
       expect(lastUpdatedParams.statusId).toBe(2); // 処理中を維持
       expect(lastUpdatedParams.summary).toBe("[調査レビュー中] [調査] ベクトルDBの比較選定");
     });
 
-    it("2. curator 差し戻し時: [調査中] に戻り、ステータスは処理中(2)を維持すること", async () => {
+    it("2. tech-lead 差し戻し時: [調査中] に戻り、ステータスは処理中(2)を維持すること", async () => {
       const runner = new MockCustomRunner(() => ({
         success: true,
         isRejection: true,
         summary: "コスト試算の不足により差し戻し",
-        output: "AWS ECS上での運用コスト試算が不足しています。directorへ差し戻します。",
+        output: "AWS ECS上での運用コスト試算が不足しています。architectへ差し戻します。",
       }));
 
       const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/search-service", false, logger, mockWorktreeManager, mockGitHubService, 3);
@@ -219,16 +219,16 @@ describe("調査タスク（実装を伴わない調査・検討・設計パイ�
         summary: "[調査レビュー中] [調査] ベクトルDBの比較選定",
       };
 
-      expect(dispatcher.resolveRole(reviewIssue, standardStatuses)).toBe("curator");
+      expect(dispatcher.resolveRole(reviewIssue, standardStatuses)).toBe("tech-lead");
 
       const res = await dispatcher.processIssue(reviewIssue, standardStatuses);
 
-      expect(res.nextStatusTarget).toBe(`[${PHASE_TAGS.investigationDirector}]`);
+      expect(res.nextStatusTarget).toBe(`[${PHASE_TAGS.investigationArchitect}]`);
       expect(res.newSummary).toBe("[調査中] [調査] ベクトルDBの比較選定");
       expect(lastUpdatedParams.statusId).toBe(2); // 処理中
     });
 
-    it("3. curator 承認（LGTM）時: [調査完了] かつステータスが処理済み(3)に更新され、調査完了報告が投稿されること", async () => {
+    it("3. tech-lead 承認（LGTM）時: [調査完了] かつステータスが処理済み(3)に更新され、調査完了報告が投稿されること", async () => {
       const runner = new MockCustomRunner(() => ({
         success: true,
         isRejection: false,
@@ -245,7 +245,7 @@ describe("調査タスク（実装を伴わない調査・検討・設計パイ�
 
       const res = await dispatcher.processIssue(reviewIssue, standardStatuses);
 
-      // artist (実装) へは進まず、パイプライン完了！
+      // developer (実装) へは進まず、パイプライン完了！
       expect(res.nextStatusTarget).toBe(`[${PHASE_TAGS.investigationCompleted}]`);
       expect(res.newSummary).toBe("[調査完了] [調査] ベクトルDBの比較選定");
       expect(lastUpdatedParams.statusId).toBe(3); // 処理済み
@@ -257,12 +257,12 @@ describe("調査タスク（実装を伴わない調査・検討・設計パイ�
       expect(lastPostedComment).toContain("コード実装へ進める場合は、本調査・設計結果をもとに新しい実装チケットを作成してください");
     });
 
-    it("4. 調査完了後に人間が追加調査を指示してステータスを「処理中」に戻した場合、director が再起動すること", async () => {
+    it("4. 調査完了後に人間が追加調査を指示してステータスを「処理中」に戻した場合、architect が再起動すること", async () => {
       const runner = new MockCustomRunner(() => ({
         success: true,
         isRejection: false,
         summary: "追加調査完了",
-        output: "マネージドサービスの可用性について追加調査しました。次は curator による調査・設計レビューです。",
+        output: "マネージドサービスの可用性について追加調査しました。次は tech-lead による調査・設計レビューです。",
       }));
 
       const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/search-service", false, logger, mockWorktreeManager, mockGitHubService, 3);
@@ -273,12 +273,12 @@ describe("調査タスク（実装を伴わない調査・検討・設計パイ�
         status: standardStatuses[1], // 処理中 (人間が戻した)
       };
 
-      // 実装タスクなら artist だが、調査タスクなので director が起動する！
-      expect(dispatcher.resolveRole(feedbackIssue, standardStatuses)).toBe("director");
+      // 実装タスクなら developer だが、調査タスクなので architect が起動する！
+      expect(dispatcher.resolveRole(feedbackIssue, standardStatuses)).toBe("architect");
 
       const res = await dispatcher.processIssue(feedbackIssue, standardStatuses);
 
-      expect(res.nextStatusTarget).toBe(`[${PHASE_TAGS.investigationCurator}]`);
+      expect(res.nextStatusTarget).toBe(`[${PHASE_TAGS.investigationTechLead}]`);
       expect(res.newSummary).toBe("[調査レビュー中] [調査] ベクトルDBの比較選定");
       expect(lastUpdatedParams.statusId).toBe(2); // 処理中
     });
@@ -326,13 +326,13 @@ describe("調査タスク（実装を伴わない調査・検討・設計パイ�
       issueType: { id: 2, name: "調査" },
       summary: "決済代行各社の手数料・仕様比較",
       description: "リポジトリ: /mock/search-service\nStripe と Pay.jp の比較調査",
-      status: customStatuses[2], // 設計レビュー中 (curator)
+      status: customStatuses[2], // 設計レビュー中 (tech-lead)
       createdUser: { id: 1, name: "ユーザー" },
       created: "2026-09-10T00:00:00Z",
       updated: "2026-09-10T00:00:00Z",
     };
 
-    it("curator 承認時に「実装中」へは進まず、「完了」ステータス(8)に更新されること", async () => {
+    it("tech-lead 承認時に「実装中」へは進まず、「完了」ステータス(8)に更新されること", async () => {
       const runner = new MockCustomRunner(() => ({
         success: true,
         isRejection: false,

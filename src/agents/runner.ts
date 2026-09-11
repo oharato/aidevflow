@@ -52,7 +52,7 @@ export class AgyRunner implements IAgentRunner {
 
   async run(role: AgentRole, context: AgentContext): Promise<AgentResult> {
     const prompt = buildAgentPrompt(role, context);
-    const isReview = role === "curator" || role === "critic" || role === "editor";
+    const isReview = role === "tech-lead" || role === "code-reviewer" || role === "qa";
     const selectedModel = (isReview && this.reviewModel) ? this.reviewModel : this.model;
 
     console.log(
@@ -266,19 +266,19 @@ export class MockRunner implements IAgentRunner {
     let isRejection = false;
 
     switch (role) {
-      case "director":
-        output = `【詳細設計書作成完了】\n- 対象: ${context.issueSummary}\n- 構成案を策定しました。\n次は curator による詳細設計レビューです。`;
+      case "architect":
+        output = `【詳細設計書作成完了】\n- 対象: ${context.issueSummary}\n- 構成案を策定しました。\n次は tech-lead による詳細設計レビューです。`;
         break;
-      case "curator":
-        output = `【詳細設計レビュー完了】\n- 設計内容を確認し、問題ありませんでした（LGTM）。\n次は artist による実装です。`;
+      case "tech-lead":
+        output = `【詳細設計レビュー完了】\n- 設計内容を確認し、問題ありませんでした（LGTM）。\n次は developer による実装です。`;
         break;
-      case "artist":
-        output = `【実装完了】\n- 設計書に基づいてコードとテストを実装しました。\n次は critic による技術レビューです。`;
+      case "developer":
+        output = `【実装完了】\n- 設計書に基づいてコードとテストを実装しました。\n次は code-reviewer による技術レビューです。`;
         break;
-      case "critic":
-        output = `【技術レビュー完了】\n- 型安全性、テスト、規約、言語・ライブラリの最新性およびバージョン妥当性を確認しました（LGTM）。\n次は editor による要件レビューです。`;
+      case "code-reviewer":
+        output = `【技術レビュー完了】\n- 型安全性、テスト、規約、言語・ライブラリの最新性およびバージョン妥当性を確認しました（LGTM）。\n次は qa による要件レビューです。`;
         break;
-      case "editor":
+      case "qa":
         output = `【要件レビュー完了】\n- チケット要件との整合性を確認しました（LGTM）。全工程が完了しました。`;
         break;
     }

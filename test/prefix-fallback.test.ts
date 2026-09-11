@@ -103,7 +103,7 @@ describe("Backlogフリープラン（標準4状態のみ）件名プレフィ�
     expect(dispatcher.isCustomStatusMode(standardStatuses)).toBe(false);
   });
 
-  it("タグなしチケット着手でdirectorが実行され、件名が[設計レビュー中]に自動更新されること", async () => {
+  it("タグなしチケット着手でarchitectが実行され、件名が[設計レビュー中]に自動更新されること", async () => {
     const runner = new MockCustomRunner(() => ({
       success: true,
       isRejection: false,
@@ -120,7 +120,7 @@ describe("Backlogフリープラン（標準4状態のみ）件名プレフィ�
   });
 
   it("設計レビュー承認により件名が[実装中]に正常更新されること", async () => {
-    const curatorIssue: BacklogIssue = {
+    const techLeadIssue: BacklogIssue = {
       ...baseIssue,
       summary: "[設計レビュー中] 決済APIリファクタリング",
       status: standardStatuses[1], // 処理中
@@ -134,7 +134,7 @@ describe("Backlogフリープラン（標準4状態のみ）件名プレフィ�
     }));
 
     const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/payment-service", false, logger, mockWorktreeManager, mockGitHubService, 3);
-    const res = await dispatcher.processIssue(curatorIssue, standardStatuses);
+    const res = await dispatcher.processIssue(techLeadIssue, standardStatuses);
 
     expect(res.newSummary).toBe("[実装中] 決済APIリファクタリング");
     expect(lastUpdatedParams.summary).toBe("[実装中] 決済APIリファクタリング");
@@ -142,7 +142,7 @@ describe("Backlogフリープラン（標準4状態のみ）件名プレフィ�
   });
 
   it("差し戻し3回で[確認待ち]かつステータスが未対応へエスカレーションされること", async () => {
-    const criticIssue: BacklogIssue = {
+    const codeReviewerIssue: BacklogIssue = {
       ...baseIssue,
       summary: "[技術レビュー中] 決済APIリファクタリング",
       status: standardStatuses[1], // 処理中
@@ -157,9 +157,9 @@ describe("Backlogフリープラン（標準4状態のみ）件名プレフィ�
 
     const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/payment-service", false, logger, mockWorktreeManager, mockGitHubService, 3);
 
-    await dispatcher.processIssue(criticIssue, standardStatuses); // 1回目
-    await dispatcher.processIssue(criticIssue, standardStatuses); // 2回目
-    const resReject3 = await dispatcher.processIssue(criticIssue, standardStatuses); // 3回目 (上限到達)
+    await dispatcher.processIssue(codeReviewerIssue, standardStatuses); // 1回目
+    await dispatcher.processIssue(codeReviewerIssue, standardStatuses); // 2回目
+    const resReject3 = await dispatcher.processIssue(codeReviewerIssue, standardStatuses); // 3回目 (上限到達)
 
     expect(resReject3.isEscalation).toBe(true);
     expect(resReject3.newSummary).toBe("[確認待ち] 決済APIリファクタリング");
@@ -241,8 +241,8 @@ describe("Backlogフリープラン（標準4状態のみ）件名プレフィ�
     expect(lastUpdatedParams.summary).toBe("[技術レビュー中] 決済APIリファクタリング");
   });
 
-  it("Editor承認時に[要件レビュー完了]かつステータスが処理済み(3)に更新されること", async () => {
-    const editorIssue: BacklogIssue = {
+  it("QA承認時に[要件レビュー完了]かつステータスが処理済み(3)に更新されること", async () => {
+    const qaIssue: BacklogIssue = {
       ...baseIssue,
       summary: "[要件レビュー中] 決済APIリファクタリング",
       status: standardStatuses[1], // 処理中
@@ -256,7 +256,7 @@ describe("Backlogフリープラン（標準4状態のみ）件名プレフィ�
     }));
 
     const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/payment-service", false, logger, mockWorktreeManager, mockGitHubService, 3);
-    const res = await dispatcher.processIssue(editorIssue, standardStatuses);
+    const res = await dispatcher.processIssue(qaIssue, standardStatuses);
 
     expect(res.newSummary).toBe("[要件レビュー完了] 決済APIリファクタリング");
     expect(lastUpdatedParams.summary).toBe("[要件レビュー完了] 決済APIリファクタリング");
@@ -279,7 +279,7 @@ describe("Backlogフリープラン（標準4状態のみ）件名プレフィ�
     expect(dispatcher.resolveRole(completedIssue, standardStatuses)).toBeNull();
   });
 
-  it("[要件レビュー完了]から人間が修正を依頼しステータスを処理中に変更した場合、artistが自動起動すること", async () => {
+  it("[要件レビュー完了]から人間が修正を依頼しステータスを処理中に変更した場合、developerが自動起動すること", async () => {
     let executedRole: AgentRole | null = null;
     const runner = new MockCustomRunner((role) => {
       executedRole = role;
@@ -299,26 +299,26 @@ describe("Backlogフリープラン（標準4状態のみ）件名プレフィ�
       status: standardStatuses[1], // 処理中 (人間が戻した)
     };
 
-    expect(dispatcher.resolveRole(humanFeedbackIssue, standardStatuses)).toBe("artist");
+    expect(dispatcher.resolveRole(humanFeedbackIssue, standardStatuses)).toBe("developer");
 
     const res = await dispatcher.processIssue(humanFeedbackIssue, standardStatuses);
 
-    expect(executedRole).toBe("artist");
+    expect(executedRole).toBe("developer");
     expect(res.newSummary).toBe("[技術レビュー中] 決済APIリファクタリング");
     expect(lastUpdatedParams.summary).toBe("[技術レビュー中] 決済APIリファクタリング");
     expect(lastUpdatedParams.statusId).toBe(2); // 処理中
   });
 
-  it("プレフィックスモードにおいて、criticがQuota上限で失敗した際に[要件レビュー中]に進まず[確認待ち]（未対応）に一時停止すること", async () => {
-    const quotaErrorOutput = `[エラー] エージェント [critic] が異常終了またはタイムアウトしました (終了コード: 1)。
+  it("プレフィックスモードにおいて、code-reviewerがQuota上限で失敗した際に[要件レビュー中]に進まず[確認待ち]（未対応）に一時停止すること", async () => {
+    const quotaErrorOutput = `[エラー] エージェント [code-reviewer] が異常終了またはタイムアウトしました (終了コード: 1)。
 エラー詳細:
 error: Individual quota reached. Resets in 2h21m6s.`;
 
     const runner = new MockCustomRunner(() => ({
-      role: "critic",
+      role: "code-reviewer",
       success: false,
       isRejection: false,
-      summary: "エージェント [critic] が実行されました (終了コード: 1)",
+      summary: "エージェント [code-reviewer] が実行されました (終了コード: 1)",
       output: quotaErrorOutput,
     }));
 
@@ -333,13 +333,13 @@ error: Individual quota reached. Resets in 2h21m6s.`;
       3
     );
 
-    const criticIssue: BacklogIssue = {
+    const codeReviewerIssue: BacklogIssue = {
       ...baseIssue,
       summary: "[技術レビュー中] 決済APIリファクタリング",
       status: standardStatuses[1], // 処理中
     };
 
-    const res = await dispatcher.processIssue(criticIssue, standardStatuses);
+    const res = await dispatcher.processIssue(codeReviewerIssue, standardStatuses);
 
     // [要件レビュー中] ではなく [確認待ち]
     expect(res.isEscalation).toBe(true);

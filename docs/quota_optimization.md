@@ -9,7 +9,7 @@
 
 1. **重量級モデル（Pro）の無指定デフォルト起動**: CLI (`agy`) 呼び出し時にモデルが明示されておらず、高コスト・低クォータ枠のモデルが全工程で使用されていた。
 2. **推論エフォート（Effort）の過剰**: レビューや確認フェーズも含めて `medium` で実行され、思考トークン（Thinking tokens）が大量に消費されていた。
-3. **調査タスク判定の書式制約によるフェーズ増大**: 本文の `種別\n調査`（改行区切り）がコロン必須の正規表現に合致せず、本来2フェーズ（director → curator）で完了するタスクが5フェーズ（artist → critic → editor まで）すべて実行されていた。
+3. **調査タスク判定の書式制約によるフェーズ増大**: 本文の `種別\n調査`（改行区切り）がコロン必須の正規表現に合致せず、本来2フェーズ（architect → tech-lead）で完了するタスクが5フェーズ（developer → code-reviewer → qa まで）すべて実行されていた。
 4. **コメント履歴の肥大化**: プロンプト注入時に、過去の AI 自身による長大な処理報告（markdown 表やコード等）がそのまま蓄積され、プロンプトの入力トークンを圧迫していた。
 5. **固定5段階パイプライン**: 軽微な改修や単一ファイル修正であっても、常に5つのエージェントが順次実行されていた。
 
@@ -25,23 +25,23 @@ flowchart TD
 
     %% 調査タスク (2フェーズ)
     Analysis -->|"調査・設計\n(種別: 調査 / 改行対応)"| InvPath["調査パイプライン (2フェーズ)"]
-    InvPath --> Inv1["1. director (調査・設計)\n[gemini-3.8-flash-high]"]
-    Inv1 --> Inv2["2. curator (調査レビュー)\n[gemini-3.8-flash-medium]"]
+    InvPath --> Inv1["1. architect (調査・設計)\n[gemini-3.8-flash-high]"]
+    Inv1 --> Inv2["2. tech-lead (調査レビュー)\n[gemini-3.8-flash-medium]"]
     Inv2 --> InvDone["調査完了 (ステータス: 処理済み/完了)"]
 
     %% Fastモード (2フェーズ)
     Analysis -->|"軽微な修正 / バグ修正\n(件名[fast] / モード: fast)"| FastPath["Fast パイプライン (2フェーズ)"]
-    FastPath --> Fast1["1. artist (実装 & テスト)\n[gemini-3.8-flash-high]"]
-    Fast1 --> Fast2["2. critic (統合レビュー & PR作成)\n[gemini-3.8-flash-high]"]
+    FastPath --> Fast1["1. developer (実装 & テスト)\n[gemini-3.8-flash-high]"]
+    Fast1 --> Fast2["2. code-reviewer (統合レビュー & PR作成)\n[gemini-3.8-flash-high]"]
     Fast2 --> FastDone["要件レビュー完了 (ステータス: 処理済み)"]
 
     %% 通常タスク (Full 5フェーズ)
     Analysis -->|"新規開発 / 大規模改修\n(通常モード)"| FullPath["Full パイプライン (5フェーズ)"]
-    FullPath --> F1["1. director (詳細設計)\n[gemini-3.8-flash-high]"]
-    F1 --> F2["2. curator (設計レビュー)\n[gemini-3.8-flash-medium]"]
-    F2 --> F3["3. artist (実装 & テスト)\n[gemini-3.8-flash-high]"]
-    F3 --> F4["4. critic (技術レビュー)\n[gemini-3.8-flash-medium]"]
-    F4 --> F5["5. editor (要件レビュー)\n[gemini-3.8-flash-medium]"]
+    FullPath --> F1["1. architect (詳細設計)\n[gemini-3.8-flash-high]"]
+    F1 --> F2["2. tech-lead (設計レビュー)\n[gemini-3.8-flash-medium]"]
+    F2 --> F3["3. developer (実装 & テスト)\n[gemini-3.8-flash-high]"]
+    F3 --> F4["4. code-reviewer (技術レビュー)\n[gemini-3.8-flash-medium]"]
+    F4 --> F5["5. qa (要件レビュー)\n[gemini-3.8-flash-medium]"]
     F5 --> FullDone["要件レビュー完了 (ステータス: 処理済み)"]
 ```
 
@@ -79,5 +79,5 @@ flowchart TD
   - チケット件名に `[fast]` または `【fast】` が含まれる
   - チケット本文に `モード: fast` または `mode: fast` と記載されている
 - **進行フロー**:
-  - `artist`（実装 & コミット & PR作成） → `critic`（技術・要件統合レビュー）の 2ステップで完了。
+  - `developer`（実装 & コミット & PR作成） → `code-reviewer`（技術・要件統合レビュー）の 2ステップで完了。
   - 設計フェーズが不要な既知の不具合修正、文言変更、リファクタリング等のトークン消費を最小化。

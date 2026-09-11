@@ -103,8 +103,8 @@ describe("Fastモード（軽量パイプライン: 実装 -> 統合レビュー
     });
   });
 
-  describe("Fastモードのライフサイクル（artist -> critic 統合レビュー -> 全工程完了）", () => {
-    it("Fastモードチケット着手時、詳細設計(director)をスキップして直接artistが初期ロールとなること", () => {
+  describe("Fastモードのライフサイクル（developer -> code-reviewer 統合レビュー -> 全工程完了）", () => {
+    it("Fastモードチケット着手時、詳細設計(architect)をスキップして直接developerが初期ロールとなること", () => {
       const runner = new MockCustomRunner(() => ({ success: true, isRejection: false, summary: "", output: "" }));
       const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/auth-service", false, logger, mockWorktreeManager, mockGitHubService, 3);
 
@@ -123,16 +123,16 @@ describe("Fastモード（軽量パイプライン: 実装 -> 統合レビュー
       };
 
       const role = dispatcher.resolveRole(fastIssue, standardStatuses);
-      expect(role).toBe("artist");
+      expect(role).toBe("developer");
     });
 
-    it("FastモードのArtist実装完了によりPRが作成され、件名が[技術レビュー中]に更新されること", async () => {
+    it("FastモードのDeveloper実装完了によりPRが作成され、件名が[技術レビュー中]に更新されること", async () => {
       const runner = new MockCustomRunner(() => ({
-        role: "artist",
+        role: "developer",
         success: true,
         isRejection: false,
         summary: "メッセージ修正完了",
-        output: "エラー文言の修正を行いました。次は critic による統合レビューです。",
+        output: "エラー文言の修正を行いました。次は code-reviewer による統合レビューです。",
       }));
 
       const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/auth-service", false, logger, mockWorktreeManager, mockGitHubService, 3);
@@ -158,9 +158,9 @@ describe("Fastモード（軽量パイプライン: 実装 -> 統合レビュー
       expect(lastPostedComment).toContain("https://github.com/my-org/auth-service/pull/99");
     });
 
-    it("FastモードのCritic承認により要件レビュー(editor)をスキップして直接全工程完了・処理済みに遷移すること", async () => {
+    it("FastモードのCode-Reviewer承認により要件レビュー(qa)をスキップして直接全工程完了・処理済みに遷移すること", async () => {
       const runner = new MockCustomRunner(() => ({
-        role: "critic",
+        role: "code-reviewer",
         success: true,
         isRejection: false,
         summary: "統合レビュー承認 (LGTM)",
@@ -185,7 +185,7 @@ describe("Fastモード（軽量パイプライン: 実装 -> 統合レビュー
 
       const res = await dispatcher.processIssue(reviewIssue, standardStatuses);
 
-      // editor をスキップして直接 [要件レビュー完了] & ステータス 処理済み(3)
+      // qa をスキップして直接 [要件レビュー完了] & ステータス 処理済み(3)
       expect(res.newSummary).toBe("[要件レビュー完了] [fast] エラーメッセージの修正");
       expect(lastUpdatedParams.statusId).toBe(3); // 処理済み
       expect(lastPostedComment).toContain("【レビュー依頼】AIエージェントによる全工程が完了しました");

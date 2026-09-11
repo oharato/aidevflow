@@ -11,10 +11,10 @@ describe("エージェントプロンプト生成 (buildAgentPrompt)", () => {
     workDir: "/worktrees/STUDY-10",
   };
 
-  it("Critic (技術レビュー) のプロンプトに言語・ライブラリの最新性・バージョン点検観点が含まれていること", () => {
-    const prompt = buildAgentPrompt("critic", dummyContext);
+  it("Code-Reviewer (技術レビュー) のプロンプトに言語・ライブラリの最新性・バージョン点検観点が含まれていること", () => {
+    const prompt = buildAgentPrompt("code-reviewer", dummyContext);
 
-    expect(prompt).toContain("あなたは【critic（技術的観点レビューエージェント）】です。");
+    expect(prompt).toContain("あなたは【code-reviewer（技術的観点レビューエージェント）】です。");
     expect(prompt).toContain("言語やライブラリのバージョン妥当性");
     expect(prompt).toContain("言語ランタイム（Node.js 等）や依存ライブラリ");
     expect(prompt).toContain("最新安定版");
@@ -22,33 +22,33 @@ describe("エージェントプロンプト生成 (buildAgentPrompt)", () => {
     expect(prompt).toContain("7日以上のクールダウン");
   });
 
-  it("Artist (実装) のプロンプトに最新安定版の依存選定・固定の指示が含まれていること", () => {
-    const prompt = buildAgentPrompt("artist", dummyContext);
+  it("Developer (実装) のプロンプトに最新安定版の依存選定・固定の指示が含まれていること", () => {
+    const prompt = buildAgentPrompt("developer", dummyContext);
 
-    expect(prompt).toContain("あなたは【artist（実装エージェント）】です。");
+    expect(prompt).toContain("あなたは【developer（実装エージェント）】です。");
     expect(prompt).toContain("最新の安定バージョン");
     expect(prompt).toContain("具体的なバージョン番号で明示・固定");
   });
 
-  it("Director / Curator / Editor のプロンプトも正常に生成されること", () => {
-    const directorPrompt = buildAgentPrompt("director", dummyContext);
-    expect(directorPrompt).toContain("あなたは【director（詳細設計エージェント）】です。");
+  it("Architect / Tech-Lead / QA のプロンプトも正常に生成されること", () => {
+    const architectPrompt = buildAgentPrompt("architect", dummyContext);
+    expect(architectPrompt).toContain("あなたは【architect（詳細設計エージェント）】です。");
 
-    const curatorPrompt = buildAgentPrompt("curator", dummyContext);
-    expect(curatorPrompt).toContain("あなたは【curator（詳細設計レビューエージェント）】です。");
+    const techLeadPrompt = buildAgentPrompt("tech-lead", dummyContext);
+    expect(techLeadPrompt).toContain("あなたは【tech-lead（詳細設計レビューエージェント）】です。");
 
-    const editorPrompt = buildAgentPrompt("editor", dummyContext);
-    expect(editorPrompt).toContain("あなたは【editor（要件的観点レビューエージェント）】です。");
+    const qaPrompt = buildAgentPrompt("qa", dummyContext);
+    expect(qaPrompt).toContain("あなたは【qa（要件的観点レビューエージェント）】です。");
   });
 
-  it("Fastモード時のCriticプロンプトに統合レビュー（技術観点＋要件充足度）の指示が含まれること", () => {
+  it("Fastモード時のCode-Reviewerプロンプトに統合レビュー（技術観点＋要件充足度）の指示が含まれること", () => {
     const fastContext: AgentContext = {
       ...dummyContext,
       isFastMode: true,
     };
-    const prompt = buildAgentPrompt("critic", fastContext);
+    const prompt = buildAgentPrompt("code-reviewer", fastContext);
 
-    expect(prompt).toContain("あなたは【critic（統合レビューエージェント）】です。");
+    expect(prompt).toContain("あなたは【code-reviewer（統合レビューエージェント）】です。");
     expect(prompt).toContain("本タスクは【Fastモード（軽量パイプライン）】です。");
     expect(prompt).toContain("技術的観点と要件充足度のレビューを1回に統合して実施します");
     expect(prompt).toContain("承認（LGTM・全工程完了）");
@@ -59,7 +59,7 @@ describe("コメント履歴圧縮 (compressRecentComments)", () => {
   it("AIの長大な処理報告を大幅に圧縮し、人間のコメントを最優先で保持すること", async () => {
     const { compressRecentComments } = await import("../src/agents/prompts.js");
 
-    const longAiReport = `### [AI] aidevflow [artist] 処理報告
+    const longAiReport = `### [AI] aidevflow [developer] 処理報告
 **結果**: 成功 ([完了/承認])
 **ブランチ**: \`STUDY-10\`
 - 🔗 **GitHub プルリクエスト**: https://github.com/org/repo/pull/1

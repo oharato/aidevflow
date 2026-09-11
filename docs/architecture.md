@@ -56,11 +56,11 @@ flowchart TD
     end
 
     subgraph Agents["5つの専門エージェント (Antigravity CLI: agy)"]
-        Director["1. Director\n(詳細設計エージェント)"]
-        Curator["2. Curator\n(詳細設計レビューエージェント)"]
-        Artist["3. Artist\n(実装 & テスト & コミット)"]
-        Critic["4. Critic\n(技術的レビュー: 静的解析/型/規約/言語・依存最新性)"]
-        Editor["5. Editor\n(要件的レビュー: 要件充足度)"]
+        Architect["1. Architect\n(詳細設計エージェント)"]
+        TechLead["2. Tech-Lead\n(詳細設計レビューエージェント)"]
+        Developer["3. Developer\n(実装 & テスト & コミット)"]
+        CodeReviewer["4. Code-Reviewer\n(技術的レビュー: 静的解析/型/規約/言語・依存最新性)"]
+        QA["5. QA\n(要件的レビュー: 要件充足度)"]
     end
 
     ProjectIssues -->|"定期取得"| Poller
@@ -70,19 +70,19 @@ flowchart TD
     WorktreeMgr -->|"git clone / fetch"| Repos
     Repos -->|"git worktree add"| Worktrees
 
-    Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| Director
-    Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| Curator
-    Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| Artist
-    Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| Critic
-    Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| Editor
+    Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| Architect
+    Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| TechLead
+    Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| Developer
+    Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| CodeReviewer
+    Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| QA
 
-    Artist -->|"実装・コミット完了"| GHService
+    Developer -->|"実装・コミット完了"| GHService
     GHService -->|"git push & gh pr create"| GitHubPRA
     GHService -->|"git push & gh pr create"| GitHubPRB
     GitHubPRA -.->|"PR URL 返却"| Dispatcher
     GitHubPRB -.->|"PR URL 返却"| Dispatcher
 
-    Editor -->|"全工程完了 (承認)"| Reporter
+    QA -->|"全工程完了 (承認)"| Reporter
     Reporter -->|"PRリンク一覧付きレビュー依頼コメント"| ReviewComment
     ReviewComment --> ProjectIssues
 
@@ -165,17 +165,17 @@ APIエンドポイントを追加し、UI側でデータを表示する。
 ```mermaid
 stateDiagram-v2
     [*] --> 詳細設計中: チケット作成 / 開始
-    詳細設計中 --> 設計レビュー中: director完了
+    詳細設計中 --> 設計レビュー中: architect完了
     
-    設計レビュー中 --> 実装中: curator承認 (LGTM)
-    設計レビュー中 --> 詳細設計中: curator差し戻し (リトライ < 上限)
+    設計レビュー中 --> 実装中: tech-lead承認 (LGTM)
+    設計レビュー中 --> 詳細設計中: tech-lead差し戻し (リトライ < 上限)
 
-    実装中 --> 技術レビュー中: artist実装・コミット完了
-    技術レビュー中 --> 要件レビュー中: critic承認 (LGTM)
-    技術レビュー中 --> 実装中: critic差し戻し (バグ/型エラー/古い依存ライブラリ指摘)
+    実装中 --> 技術レビュー中: developer実装・コミット完了
+    技術レビュー中 --> 要件レビュー中: code-reviewer承認 (LGTM)
+    技術レビュー中 --> 実装中: code-reviewer差し戻し (バグ/型エラー/古い依存ライブラリ指摘)
 
     %% 人間レビューと完了・差し戻し
-    要件レビュー中 --> 処理済み: editor承認 (全工程完了)\n★ PRリンク付きレビュー依頼コメント投稿
+    要件レビュー中 --> 処理済み: qa承認 (全工程完了)\n★ PRリンク付きレビュー依頼コメント投稿
     処理済み --> 実装中: 人間レビューで修正指示\n(コメント投稿 ＋ ステータス「処理中」に変更)
     処理済み --> 完了: 人間による最終確認 & GitHub PRマージ\n(ステータス「完了」に変更)
 
@@ -216,7 +216,7 @@ stateDiagram-v2
 5. **人間レビュー後の修正依頼（差し戻し）・完了フロー**:
    - **修正を依頼する場合**:
      - Backlog チケットのコメント欄に修正指示（PRへのコメント参照等）を記入し、ステータスを **「処理中」** に戻します。
-     - デーモンが `[要件レビュー完了]` 状態からの「処理中」への変更を検知し、自動的に `artist`（実装）を起動して既存の worktree 上で修正を行い、PR へ追記 push します。
+     - デーモンが `[要件レビュー完了]` 状態からの「処理中」への変更を検知し、自動的に `developer`（実装）を起動して既存の worktree 上で修正を行い、PR へ追記 push します。
    - **完了とする場合**:
      - GitHub 上で PR をマージし、Backlog チケットのステータスを **「完了」** に変更します。
 
@@ -232,11 +232,11 @@ Backlog のフリープランや一部下位プランでは、API によるカ�
 | エージェント / フェーズ | 標準ステータス | 件名プレフィックス | 説明 |
 | :--- | :--- | :--- | :--- |
 | **開始前 / 人間確認待ち** | **未対応** (`statusId=1`) | なし、または `[確認待ち]` | 人間が起票した直後、またはAIからの質問停止時 |
-| **Director (詳細設計)** | **処理中** (`statusId=2`) | `[詳細設計中]` | チケット着手直後。要件から詳細設計書を作成 |
-| **Curator (設計レビュー)** | **処理中** (`statusId=2`) | `[設計レビュー中]` | 設計書の客観的レビュー・差し戻し判定 |
-| **Artist (実装)** | **処理中** (`statusId=2`) | `[実装中]` | コード実装、単体テスト、Git コミット |
-| **Critic (技術レビュー)** | **処理中** (`statusId=2`) | `[技術レビュー中]` | 静的解析・型・セキュリティ・品質・言語/依存ライブラリ最新性レビュー |
-| **Editor (要件レビュー)** | **処理中** (`statusId=2`) | `[要件レビュー中]` | 元のチケット要件を満たしているかの最終検査 |
+| **Architect (詳細設計)** | **処理中** (`statusId=2`) | `[詳細設計中]` | チケット着手直後。要件から詳細設計書を作成 |
+| **Tech-Lead (設計レビュー)** | **処理中** (`statusId=2`) | `[設計レビュー中]` | 設計書の客観的レビュー・差し戻し判定 |
+| **Developer (実装)** | **処理中** (`statusId=2`) | `[実装中]` | コード実装、単体テスト、Git コミット |
+| **Code-Reviewer (技術レビュー)** | **処理中** (`statusId=2`) | `[技術レビュー中]` | 静的解析・型・セキュリティ・品質・言語/依存ライブラリ最新性レビュー |
+| **QA (要件レビュー)** | **処理中** (`statusId=2`) | `[要件レビュー中]` | 元のチケット要件を満たしているかの最終検査 |
 | **全工程完了 (PR レビュー待ち)** | **処理済み** (`statusId=3`) | `[要件レビュー完了]` | 人間による PR レビュー・マージ待ち |
 | **マージ完了** | **完了** (`statusId=4`) | `[要件レビュー完了]` 等 | 人間が PR をマージしてチケットをクローズ |
 
@@ -248,16 +248,16 @@ Backlog のフリープランや一部下位プランでは、API によるカ�
 
 ## 7. 調査タスク対応（実装を伴わない調査・検討・設計パイプライン）
 
-「コード実装ではなく技術調査・比較検討・アーキテクチャ設計・スパイク（Spike）を行いたい」というユースケースに対応するため、**設計（Director）と設計レビュー（Curator）のみで完了する調査モード**をサポートしています。
+「コード実装ではなく技術調査・比較検討・アーキテクチャ設計・スパイク（Spike）を行いたい」というユースケースに対応するため、**設計（Architect）と設計レビュー（Tech-Lead）のみで完了する調査モード**をサポートしています。
 
 ```mermaid
 flowchart TD
-    Issue["Backlog チケット起票\n(種別/カテゴリ/件名に [調査] や Spike を指定)"] --> Director["1. Director\n(技術調査・比較検討・設計書作成)"]
-    Director -->|"成果物: docs/investigation_report.md"| Curator["2. Curator\n(調査結果・設計書の客観レビュー)"]
-    Curator -->|"差し戻し (不足・追加調査)"| Director
-    Curator -->|"承認 (LGTM)"| Done["調査完了 (ステータス: 処理済み)\n★ 調査報告書レビュー依頼コメント投稿"]
+    Issue["Backlog チケット起票\n(種別/カテゴリ/件名に [調査] や Spike を指定)"] --> Architect["1. Architect\n(技術調査・比較検討・設計書作成)"]
+    Architect -->|"成果物: docs/investigation_report.md"| TechLead["2. Tech-Lead\n(調査結果・設計書の客観レビュー)"]
+    TechLead -->|"差し戻し (不足・追加調査)"| Architect
+    TechLead -->|"承認 (LGTM)"| Done["調査完了 (ステータス: 処理済み)\n★ 調査報告書レビュー依頼コメント投稿"]
     Done -->|"人間による確認完了"| Closed["チケット完了 (クローズ)"]
-    Done -->|"人間による追加調査指示\n(コメント ＋ ステータス「処理中」)"| Director
+    Done -->|"人間による追加調査指示\n(コメント ＋ ステータス「処理中」)"| Architect
 ```
 
 ### 1. 調査タスクの自動判別条件
@@ -268,15 +268,15 @@ flowchart TD
 4. **本文指定**: `タスク種別: 調査`, `種別: 調査`, `モード: 調査`, `type: investigation`
 
 ### 2. 調査タスクにおけるパイプラインの動き
-- **Director（調査・設計）**:
+- **Architect（調査・設計）**:
   - チケットの背景や論点に基づき、技術検証、フィジビリティスタディ、比較検討を実施。
   - **リポジトリへのドキュメント作成・修正**:
     - チケット要件や指示（例: 「リポジトリにドキュメント残して」「READMEに追記して」「docs/に設計書を作成して」等）がある場合、リポジトリ内のファイル（`docs/investigation_report.md`、`docs/detailed_design.md`、`README.md`、検証コード等）を直接作成・編集し、Git コミットします。
     - 万が一エージェントがコミットコマンドを実行し忘れた場合でも、デーモンが未コミットの成果物を自動検知して安全に自動コミットします。
-- **Curator（調査レビュー）**:
+- **Tech-Lead（調査レビュー）**:
   - 調査結果やリポジトリの修正差分（git diff）の妥当性、論点の網羅性を客観的にレビュー。
-  - 不足があれば Director へ差し戻し。軽微な修正であれば自らリポジトリファイルを修正してコミット可能。
-  - 問題がなければ **「承認（LGTM）」** とし、**Artist（実装）へは進まず全工程完了（調査完了）** と判定。
+  - 不足があれば Architect へ差し戻し。軽微な修正であれば自らリポジトリファイルを修正してコミット可能。
+  - 問題がなければ **「承認（LGTM）」** とし、**Developer（実装）へは進まず全工程完了（調査完了）** と判定。
 - **GitHub PR の自動作成**:
   - リポジトリに変更・コミットがある場合、自動的に GitHub へブランチが push され、Pull Request が作成されます。
 - **Backlog ステータス更新**:
@@ -284,20 +284,20 @@ flowchart TD
   - ステータス: **「処理済み」**（カスタム状態利用時は「完了」）
   - コメント: PR リンク、調査報告書の要約、および人間向けの対応手順（PRマージ方法、追加調査指示方法）を自動投稿。
 - **人間による追加指示フロー**:
-  - 人間がレビュー後にチケットコメントに追加指示（「〜についてもドキュメントに追記して」等）を書き、ステータスを **「処理中」** に戻すと、自動的に **Director（再調査・設計修正）** が再起動してリポジトリのドキュメントを更新します。
+  - 人間がレビュー後にチケットコメントに追加指示（「〜についてもドキュメントに追記して」等）を書き、ステータスを **「処理中」** に戻すと、自動的に **Architect（再調査・設計修正）** が再起動してリポジトリのドキュメントを更新します。
 
 ---
 
 ## 8. Fast モード対応（軽量2段階パイプライン: 実装 → 統合レビュー）
 
-「既知の軽微なバグ修正」「文言やスタイルの変更」「小規模なリファクタリング」など、詳細設計フェーズ（Director/Curator）を必要としないタスク向けに、**実装（Artist）と統合レビュー（Critic）の2フェーズのみで完了する「Fast モード」** をサポートしています。
+「既知の軽微なバグ修正」「文言やスタイルの変更」「小規模なリファクタリング」など、詳細設計フェーズ（Architect/Tech-Lead）を必要としないタスク向けに、**実装（Developer）と統合レビュー（Code-Reviewer）の2フェーズのみで完了する「Fast モード」** をサポートしています。
 
 ```mermaid
 flowchart TD
-    Issue["Backlog チケット起票\n(件名に [fast] または本文に モード: fast)"] --> Artist["1. Artist\n(コード実装 & テスト & PR作成)"]
-    Artist --> Critic["2. Critic\n(技術観点 ＋ 要件充足度の統合レビュー)"]
-    Critic -->|"差し戻し (バグ・要件不足)"| Artist
-    Critic -->|"承認 (LGTM)"| Done["全工程完了 (ステータス: 処理済み)\n★ PRリンク付きレビュー依頼コメント投稿"]
+    Issue["Backlog チケット起票\n(件名に [fast] または本文に モード: fast)"] --> Developer["1. Developer\n(コード実装 & テスト & PR作成)"]
+    Developer --> CodeReviewer["2. Code-Reviewer\n(技術観点 ＋ 要件充足度の統合レビュー)"]
+    CodeReviewer -->|"差し戻し (バグ・要件不足)"| Developer
+    CodeReviewer -->|"承認 (LGTM)"| Done["全工程完了 (ステータス: 処理済み)\n★ PRリンク付きレビュー依頼コメント投稿"]
 ```
 
 ### 1. Fast モードの自動判別条件
@@ -306,14 +306,14 @@ flowchart TD
 2. **本文指定**: `モード: fast`, `モード:fast`, `mode: fast`, `mode:fast`
 
 ### 2. Fast モードにおけるパイプラインの動き
-- **Artist（実装・PR作成）**:
-  - 詳細設計フェーズをスキップし、初期ロールとして直接 `artist` が起動。
+- **Developer（実装・PR作成）**:
+  - 詳細設計フェーズをスキップし、初期ロールとして直接 `developer` が起動。
   - チケット要件から直接コードを修正し、テストを実行・コミット。
   - 対象リポジトリから GitHub へのブランチ push と Pull Request 作成を自動実行。
   - 完了すると自動的に `[技術レビュー中]` へ遷移。
-- **Critic（技術＆要件統合レビュー）**:
+- **Code-Reviewer（技術＆要件統合レビュー）**:
   - 通常の静的解析・型・セキュリティ・品質レビューに加え、チケットの受け入れ要件を満たしているかを一括レビュー。
-  - 問題があれば `artist` へ差し戻し（`[実装中]` へ戻る）。
+  - 問題があれば `developer` へ差し戻し（`[実装中]` へ戻る）。
   - 問題がなければ **承認（LGTM）** し、そのまま **全工程完了（要件レビューフェーズをスキップ）** と判定。
 - **完了報告**:
   - ステータスが **「処理済み」**（件名: `[要件レビュー完了]`）に更新され、PRリンク付き完了コメントが自動投稿されます。
@@ -354,7 +354,7 @@ flowchart TD
     FilterCheck{"フィルタ条件チェック\n- TARGET_ISSUE_TYPE\n- TARGET_CATEGORY\n- REQUIRE_AI_TAG"}
     
     Ignore["スキップ (AI 処理対象外)"]
-    Dispatch["AI パイプライン開始\n[詳細設計中] -> Director"]
+    Dispatch["AI パイプライン開始\n[詳細設計中] -> Architect"]
 
     Create --> Draft
     Draft -->|"書きかけ"| Ignore
@@ -384,7 +384,7 @@ AGENT_RUNNER=mock pnpm start
 ```
 
 ### 目的
-LLM（Claude や Gemini 等）の実際の呼び出しを行わず、各専門エージェント（Director, Curator, Artist, Critic, Editor）の処理結果・承認・成果物生成を数秒の擬似ディレイとともにシミュレートする動作検証モードです。
+LLM（Claude や Gemini 等）の実際の呼び出しを行わず、各専門エージェント（Architect, Tech-Lead, Developer, Code-Reviewer, QA）の処理結果・承認・成果物生成を数秒の擬似ディレイとともにシミュレートする動作検証モードです。
 
 ### 利点と用途
 - **トークン消費ゼロ & 即時検証**: API 課金やレートリミットを気にせず、短時間でエンドツーエンドの挙動を確認可能。

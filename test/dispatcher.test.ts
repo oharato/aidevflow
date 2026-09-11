@@ -15,11 +15,11 @@ describe("AgentDispatcher (複数リポジトリ・PR連携含む)", () => {
       new MockRunner(),
       "/mock/repo"
     );
-    expect(dispatcher.resolveRoleFromStatus("実装中")).toBe("artist");
-    expect(dispatcher.resolveRoleFromStatus("詳細設計中")).toBe("director");
-    expect(dispatcher.resolveRoleFromStatus("設計レビュー中")).toBe("curator");
-    expect(dispatcher.resolveRoleFromStatus("技術レビュー中")).toBe("critic");
-    expect(dispatcher.resolveRoleFromStatus("要件レビュー中")).toBe("editor");
+    expect(dispatcher.resolveRoleFromStatus("実装中")).toBe("developer");
+    expect(dispatcher.resolveRoleFromStatus("詳細設計中")).toBe("architect");
+    expect(dispatcher.resolveRoleFromStatus("設計レビュー中")).toBe("tech-lead");
+    expect(dispatcher.resolveRoleFromStatus("技術レビュー中")).toBe("code-reviewer");
+    expect(dispatcher.resolveRoleFromStatus("要件レビュー中")).toBe("qa");
     expect(dispatcher.resolveRoleFromStatus("不明な状態")).toBeNull();
   });
 
