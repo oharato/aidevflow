@@ -1,14 +1,78 @@
 import type { AgentRole, AgentContext } from "./types.js";
 
-export function buildAgentPrompt(role: AgentRole, context: AgentContext): string {
-  let commentsText =
-    context.recentComments.length > 0
-      ? context.recentComments.join("\n---\n")
-      : "(コメントなし)";
-
-  if (commentsText.length > 6000) {
-    commentsText = commentsText.slice(0, 6000) + "\n...[長文のため以降省略]...";
+/**
+ * クォータ削減のため、過去コメントからAIの長大ログを要約・トリムし、
+ * 人間による指示や回答を最優先で残すコンテキスト圧縮処理
+ */
+export function compressRecentComments(rawComments: string[], maxTotalChars: number = 2500): string {
+  if (!rawComments || rawComments.length === 0) {
+    return "(コメントなし)";
   }
+
+  const processed = rawComments.map((comment) => {
+    const trimmed = comment.trim();
+    // AIエージェントの自動報告コメントかどうかを判定
+    const isAiReport =
+      trimmed.includes("### [AI] aidevflow") ||
+      trimmed.includes("### 🚀 【レビュー依頼】") ||
+      trimmed.includes("### 【レビュー依頼】") ||
+      trimmed.includes("### ⚠️ 【自律パイプライン一時停止】") ||
+      trimmed.includes("### ⚠️ 【人間への確認依頼】") ||
+      trimmed.includes("### 【調査完了報告】");
+
+    if (isAiReport) {
+      // AIレポートの場合、見出しや要約・結論のみを抽出して大幅圧縮
+      const lines = trimmed.split("\n");
+      const summaryLines: string[] = [];
+      let inReportSection = false;
+
+      for (const line of lines) {
+        if (
+          line.startsWith("**結果**") ||
+          line.startsWith("**次の想定フェーズ**") ||
+          line.startsWith("- **新件名**") ||
+          line.startsWith("- **理由**") ||
+          line.startsWith("###") ||
+          line.includes("error:") ||
+          line.includes("Individual quota reached") ||
+          line.includes("LGTM") ||
+          line.includes("承認") ||
+          line.includes("差し戻し")
+        ) {
+          summaryLines.push(line);
+        } else if (
+          line.startsWith("#### 実行ログ") ||
+          line.startsWith("#### 最終要件レビュー報告") ||
+          line.startsWith("#### 調査・設計レビュー報告")
+        ) {
+          summaryLines.push(line);
+          inReportSection = true;
+        } else if (inReportSection && summaryLines.length < 8) {
+          summaryLines.push(line);
+        }
+      }
+
+      const compressed = summaryLines.slice(0, 8).join("\n");
+      return `[AI処理サマリー]:\n${compressed || trimmed.slice(0, 250)}`;
+    }
+
+    // 人間のコメントはそのまま保持（ただし単体で1200文字を超える場合は末尾トリム）
+    if (trimmed.length > 1200) {
+      return trimmed.slice(0, 1200) + "\n...[長文のため一部省略]...";
+    }
+    return trimmed;
+  });
+
+  let result = processed.join("\n---\n");
+  if (result.length > maxTotalChars) {
+    result = result.slice(0, maxTotalChars) + "\n...[以降省略]...";
+  }
+
+  return result;
+}
+
+export function buildAgentPrompt(role: AgentRole, context: AgentContext): string {
+  const commentsText = compressRecentComments(context.recentComments);
 
   const baseHeader = `
 === タスク情報 ===
@@ -109,6 +173,26 @@ directorが作成した詳細設計書の妥当性を客観的にレビューし
 作業が完了したら、実装した差分の要約と「次は critic による技術レビューです」と報告してください。`;
 
     case "critic":
+      if (context.isFastMode) {
+        return `${baseHeader}
+
+あなたは【critic（統合レビューエージェント）】です。
+【本タスクの種別】
+本タスクは【Fastモード（軽量パイプライン）】です。
+※本タスクでは迅速なデリバリーとクォータ最適化のため、技術的観点と要件充足度のレビューを1回に統合して実施します。
+
+【役割】
+artistの実装したコードに対して、技術的品質（バグ・セキュリティ・型安全性・規約・テスト品質・言語やライブラリのバージョン妥当性）および Backlog チケット要件の充足度の双方をゼロベースでレビューしてください。
+
+【実施事項】
+1. git diff または実装コードを検査し、技術的懸念や要件との差分を洗い出す
+2. 言語ランタイム（Node.js 等）や依存ライブラリ（package.json / .mise.toml 等）のバージョンができるだけ最新かつ適切か点検する
+3. チケット要件が満たされているか照合する
+4. バグ、型エラー、セキュリティ脆弱性、テスト不足、古い依存バージョン等の問題があれば具体的に指摘し「artistへ差し戻し」と明記する
+5. アーキテクチャの大幅な変更や外部要因など人間側の判断が必要な場合は、「【人間への確認依頼】」または「CONFIRM_HUMAN」と明記してエスカレーションしてください（※自律解決可能でエスカレーションが不要な場合は、これらのキーワードを出力文中に含めないでください）。
+6. 問題がなければ「承認（LGTM・全工程完了）」とし、「次は全工程完了（要件レビュー完了）です」と報告してください。`;
+      }
+
       return `${baseHeader}
 
 あなたは【critic（技術的観点レビューエージェント）】です。

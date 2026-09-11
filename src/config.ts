@@ -24,6 +24,8 @@ export interface AppConfig {
   aidevflowHome: string;
   maxRejectionCount: number;
   agyEffort?: "low" | "medium" | "high";
+  agyModel?: string;
+  agyReviewModel?: string;
   logFilePath: string;
   targetIssueType?: string;
   targetCategory?: string;
@@ -44,7 +46,9 @@ export function loadConfig(): AppConfig {
   const defaultRepoPath = process.env.DEFAULT_REPO_PATH || agentWorkDir;
   const aidevflowHome = process.env.AIDEVFLOW_HOME || path.join(os.homedir(), "aidevflow");
   const maxRejectionCount = Number(process.env.MAX_REJECTION_COUNT) || 3;
-  const agyEffort = (process.env.AGY_EFFORT || "medium") as AppConfig["agyEffort"];
+  const agyEffort = (process.env.AGY_EFFORT || "low") as AppConfig["agyEffort"];
+  const agyModel = process.env.AGY_MODEL || "gemini-3.8-flash-high";
+  const agyReviewModel = process.env.AGY_REVIEW_MODEL || undefined;
   const logFilePath = process.env.LOG_FILE_PATH || "logs/aidevflow.jsonl";
   const targetIssueType = process.env.TARGET_ISSUE_TYPE || undefined;
   const targetCategory = process.env.TARGET_CATEGORY || undefined;
@@ -64,6 +68,8 @@ export function loadConfig(): AppConfig {
     aidevflowHome,
     maxRejectionCount,
     agyEffort,
+    agyModel,
+    agyReviewModel,
     logFilePath,
     targetIssueType,
     targetCategory,

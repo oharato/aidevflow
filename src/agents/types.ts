@@ -7,6 +7,7 @@ export interface AgentContext {
   recentComments: string[];
   workDir: string;
   isInvestigation?: boolean;
+  isFastMode?: boolean;
 }
 
 export interface AgentResult {

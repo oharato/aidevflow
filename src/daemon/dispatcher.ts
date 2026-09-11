@@ -18,6 +18,7 @@ import {
   getNextPhaseTag,
   PHASE_TAGS,
   isInvestigationIssue,
+  isFastModeIssue,
 } from "../backlog/prefix-helper.js";
 
 export interface ProcessIssueResult {
@@ -150,9 +151,11 @@ export class AgentDispatcher {
       return parsed.role;
     }
 
-    // タグがなく「処理中」になっている場合は初期ロール director (詳細設計)
+    // タグがなく「処理中」になっている場合:
+    // Fastモードなら初期ロールは artist (実装)、それ以外は director (詳細設計)
     if (statusName.includes("処理中")) {
-      return "director";
+      const isFast = isFastModeIssue(issue);
+      return isFast ? "artist" : "director";
     }
 
     return null;
@@ -192,7 +195,8 @@ export class AgentDispatcher {
   getNextStatusName(
     currentRole: AgentRole,
     isRejection: boolean,
-    isInvestigation: boolean = false
+    isInvestigation: boolean = false,
+    isFastMode: boolean = false
   ): string {
     if (isRejection) {
       switch (currentRole) {
@@ -214,7 +218,7 @@ export class AgentDispatcher {
       case "artist":
         return "技術レビュー";
       case "critic":
-        return "要件レビュー";
+        return isFastMode ? "完了" : "要件レビュー";
       case "editor":
         return "完了";
     }
@@ -395,6 +399,7 @@ export class AgentDispatcher {
     }
 
     const isInvestigation = isInvestigationIssue(issue);
+    const isFastMode = isFastModeIssue(issue);
 
     const context: AgentContext = {
       issueKey: issue.issueKey,
@@ -403,6 +408,7 @@ export class AgentDispatcher {
       recentComments,
       workDir: executionWorkDir,
       isInvestigation,
+      isFastMode,
     };
 
     // 3. エージェント実行
@@ -450,13 +456,14 @@ export class AgentDispatcher {
       }
     }
 
-    // 5. GitHub PR の一括作成 / 取得 (Artist 実装完了時、最終 Editor フェーズ、または調査タスクのフェーズ)
+    // 5. GitHub PR の一括作成 / 取得 (Artist 実装完了時、最終 Editor フェーズ、Fast モード Critic、または調査タスクのフェーズ)
     let prResults: PullRequestResult[] = [];
     const shouldEnsurePr =
       result.success &&
       !result.isRejection &&
       (role === "artist" ||
         role === "editor" ||
+        (isFastMode && role === "critic") ||
         (isInvestigation && (role === "director" || role === "curator")));
 
     if (shouldEnsurePr) {
@@ -527,7 +534,7 @@ export class AgentDispatcher {
       result.success &&
       !result.isRejection &&
       !isEscalation &&
-      (isInvestigation ? role === "curator" : role === "editor");
+      (isInvestigation ? role === "curator" : (isFastMode ? role === "critic" : role === "editor"));
     const isCustom = this.isCustomStatusMode(projectStatuses);
 
     if (isCustom) {
@@ -536,7 +543,7 @@ export class AgentDispatcher {
         nextStatusTarget = "確認待ち";
       } else {
         nextStatusTarget = result.success
-          ? this.getNextStatusName(role, result.isRejection ?? false, isInvestigation)
+          ? this.getNextStatusName(role, result.isRejection ?? false, isInvestigation, isFastMode)
           : issue.status.name;
       }
       nextStatusId = this.findStatusIdByName(projectStatuses, nextStatusTarget);
@@ -550,8 +557,8 @@ export class AgentDispatcher {
         nextStatusId = this.findStatusIdByName(projectStatuses, "未対応") || 1;
       } else {
         const nextPhaseTag = result.success
-          ? getNextPhaseTag(role, result.isRejection ?? false, isInvestigation)
-          : (parsePhaseFromSummary(issue.summary).tag || getNextPhaseTag(role, false, isInvestigation));
+          ? getNextPhaseTag(role, result.isRejection ?? false, isInvestigation, isFastMode)
+          : (parsePhaseFromSummary(issue.summary).tag || getNextPhaseTag(role, false, isInvestigation, isFastMode));
         newSummary = formatSummaryWithPhase(issue.summary, nextPhaseTag);
         nextStatusTarget = `[${nextPhaseTag}]`;
         if (isFinalApproval) {
@@ -677,10 +684,18 @@ export class AgentDispatcher {
           issue.issueKey
         );
 
+        const phaseProcessDesc = isFastMode
+          ? "開発工程（実装 → 統合レビュー）"
+          : "すべての開発工程（詳細設計 → 設計レビュー → 実装 → 技術レビュー → 要件レビュー）";
+
+        const reviewReportTitle = isFastMode
+          ? "#### 統合レビュー報告:"
+          : "#### 最終要件レビュー報告:";
+
         commentLines.push(
           `### 【レビュー依頼】AIエージェントによる全工程が完了しました`,
           ``,
-          `チケット **${issue.issueKey}: ${newSummary || issue.summary}** に対するすべての開発工程（詳細設計 → 設計レビュー → 実装 → 技術レビュー → 要件レビュー）が完了しました。`,
+          `チケット **${issue.issueKey}: ${newSummary || issue.summary}** に対する${phaseProcessDesc}が完了しました。`,
           ``,
           `以下のプルリクエストをご確認の上、レビュー・マージをお願いいたします。`,
           ``,
@@ -690,7 +705,7 @@ export class AgentDispatcher {
           `- **ステータス**: ${nextStatusTarget}`,
           ...(newSummary ? [`- **新件名**: \`${newSummary}\``] : []),
           ``,
-          `#### 最終要件レビュー報告:`,
+          reviewReportTitle,
           result.output,
           ``,
           `---`,

@@ -33,20 +33,31 @@ export class AgyRunner implements IAgentRunner {
   private workDir: string;
   private effort: "low" | "medium" | "high";
   private timeout: string;
+  private model?: string;
+  private reviewModel?: string;
 
   constructor(
     workDir: string = process.cwd(),
-    effort: "low" | "medium" | "high" = "medium",
-    timeout: string = "20m"
+    effort: "low" | "medium" | "high" = "low",
+    timeout: string = "20m",
+    model?: string,
+    reviewModel?: string
   ) {
     this.workDir = workDir;
     this.effort = effort;
     this.timeout = timeout;
+    this.model = model || "gemini-3.8-flash-high";
+    this.reviewModel = reviewModel;
   }
 
   async run(role: AgentRole, context: AgentContext): Promise<AgentResult> {
     const prompt = buildAgentPrompt(role, context);
-    console.log(`[AgyRunner] Spawning Antigravity CLI (agy) for role: ${role}... (timeout: ${this.timeout})`);
+    const isReview = role === "curator" || role === "critic" || role === "editor";
+    const selectedModel = (isReview && this.reviewModel) ? this.reviewModel : this.model;
+
+    console.log(
+      `[AgyRunner] Spawning Antigravity CLI (agy) for role: ${role}... (model: ${selectedModel || "default"}, effort: ${this.effort}, timeout: ${this.timeout})`
+    );
 
     return new Promise<AgentResult>((resolve, reject) => {
       const args = [
@@ -60,6 +71,10 @@ export class AgyRunner implements IAgentRunner {
         "--output-format",
         "stream-json",
       ];
+
+      if (selectedModel) {
+        args.push("--model", selectedModel);
+      }
 
       const startTime = Date.now();
       let elapsedSeconds = 0;

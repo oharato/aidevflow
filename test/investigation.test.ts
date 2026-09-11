@@ -112,6 +112,14 @@ describe("調査タスク（実装を伴わない調査・検討・設計パイ�
       expect(isInvestigationIssue({ summary: "アーキテクチャ検討", description: "タスク種別: 調査\nマイクロサービスの分割方針" })).toBe(true);
       expect(isInvestigationIssue({ summary: "アーキテクチャ検討", description: "mode: spike\n技術検証" })).toBe(true);
     });
+
+    it("本文にタスク種別やモードが改行区切りや箇条書きで明記されている場合にも調査タスクと判定されること (STUDY-5ケース)", () => {
+      const study5Desc = `リポジトリ\nhttps://github.com/oharato/company-search-inquiry\n\n種別\n調査\n\n要件\n宣言的マイグレーションツール atlasを使ってみたい。`;
+      expect(isInvestigationIssue({ summary: "マイグレーションツール選定", description: study5Desc })).toBe(true);
+
+      const bulletDesc = `【概要】\nモード\n- 調査\n検証を実施する。`;
+      expect(isInvestigationIssue({ summary: "技術検証", description: bulletDesc })).toBe(true);
+    });
   });
 
   describe("調査タスクのプロンプト生成", () => {
