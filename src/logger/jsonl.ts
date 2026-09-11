@@ -14,6 +14,8 @@ export type EventType =
   | "comment_posted"
   | "status_created"
   | "human_escalation"
+  | "quota_locked"
+  | "quota_recovered"
   | "error";
 
 export interface LogEvent {

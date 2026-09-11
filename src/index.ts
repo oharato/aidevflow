@@ -7,6 +7,7 @@ import { JsonlLogger } from "./logger/jsonl.js";
 import { GitWorktreeManager } from "./git/worktree.js";
 import { GitHubService } from "./git/github.js";
 import { ProcessLock } from "./daemon/lock.js";
+import { QuotaLockManager } from "./daemon/quota-lock.js";
 
 async function main() {
   console.log("==================================================");
@@ -75,6 +76,24 @@ async function main() {
 
   const worktreeManager = new GitWorktreeManager(config.aidevflowHome);
   const githubService = new GitHubService();
+  const quotaLockManager = new QuotaLockManager(config.quotaLockFilePath);
+
+  if (quotaLockManager.isLocked()) {
+    const meta = quotaLockManager.readMetadata();
+    console.warn("==================================================");
+    console.warn("⚠️ 【クォータ制限中】ローカルのクォータロックファイルを検知しました");
+    console.warn(`  - ロックファイル: ${quotaLockManager.getLockFilePath()}`);
+    if (meta) {
+      console.warn(`  - 発生日時: ${meta.lockedAt}`);
+      console.warn(`  - 対象チケット: ${meta.issueKey} (ロール: ${meta.role})`);
+      if (meta.resetsAt) {
+        console.warn(`  - リセット予定: ${meta.resetsAt} (${meta.resetDurationText || ""})`);
+      }
+    }
+    console.warn("  ※ デーモン起動後、Backlogポーリングを休止し、クォータ回復監視モードで待機します。");
+    console.warn("  ※ 手動で即座に解除する場合は、上記ロックファイルを削除してください。");
+    console.warn("==================================================");
+  }
 
   const dispatcher = new AgentDispatcher(
     backlog,
@@ -84,7 +103,9 @@ async function main() {
     logger,
     worktreeManager,
     githubService,
-    config.maxRejectionCount
+    config.maxRejectionCount,
+    undefined,
+    quotaLockManager
   );
 
   const poller = new BacklogPoller(
@@ -99,7 +120,10 @@ async function main() {
       targetCategory: config.targetCategory,
       requireAiTag: config.requireAiTag,
     },
-    config.maxConcurrency
+    config.maxConcurrency,
+    quotaLockManager,
+    config.quotaProbeIntervalSec,
+    config.quotaAutoResume
   );
 
   const handleShutdown = async () => {

@@ -121,6 +121,6 @@ pnpm run start:bg
 - 🔀 **[複数チケット並行開発 & Git Worktree 仕様書](docs/concurrency_worktree.md)**
   - `git worktree` による完全分離ディレクトリ構造、`MAX_CONCURRENCY`（ワーカープール）、`inFlightIssues` 二重起動防止、Git 排他制御（Mutex）
 - ⚡ **[クォータ消費最適化 & 軽量パイプライン仕様書](docs/quota_optimization.md)**
-  - Flash モデル標準化、推論エフォート低減、プロンプト・コメント履歴圧縮、Fast モードの最適化設計
+  - Flash モデル標準化、推論エフォート低減、プロンプト圧縮、Fast モード、クォータ枯渇ロック (`.aidevflow.quota.lock`) & Backlog ポーリング休止 & 自動回復・再開 (Auto-Resume)
 - 🛡️ **[トラブルシューティング & エスカレーション仕様書](docs/troubleshooting.md)**
-  - 差し戻し無限ループ防止 (`MAX_REJECTION_COUNT`)、AIからの質問エスカレーション (`【人間への確認依頼】`)、LLM クォータ制限時の安全停止・復帰手順、二重起動防止ロック
+  - 差し戻し無限ループ防止 (`MAX_REJECTION_COUNT`)、AIからの質問エスカレーション (`【人間への確認依頼】`)、LLM クォータ制限時の安全停止と自動・手動復帰手順、二重起動防止ロック

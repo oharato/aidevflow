@@ -19,6 +19,14 @@ export interface AgentResult {
   output: string;
 }
 
+export interface QuotaProbeResult {
+  recovered: boolean;
+  resetDurationSec?: number | null;
+  resetDurationText?: string;
+  errorMessage?: string;
+}
+
 export interface IAgentRunner {
   run(role: AgentRole, context: AgentContext): Promise<AgentResult>;
+  probeQuotaRecovery?(): Promise<QuotaProbeResult>;
 }

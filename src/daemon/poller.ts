@@ -2,6 +2,9 @@ import type { BacklogClient } from "../backlog/client.js";
 import type { AgentDispatcher } from "./dispatcher.js";
 import type { BacklogStatus, BacklogIssue } from "../backlog/types.js";
 import type { JsonlLogger } from "../logger/jsonl.js";
+import { QuotaLockManager, type QuotaLockMetadata } from "./quota-lock.js";
+import type { QuotaProbeResult, AgentRole } from "../agents/types.js";
+import { PHASE_TAGS, formatSummaryWithPhase } from "../backlog/prefix-helper.js";
 
 export interface PollerFilterOptions {
   targetIssueType?: string;
@@ -25,6 +28,10 @@ export class BacklogPoller {
   private issueStatusCache: Map<string, string> = new Map();
   private logger?: JsonlLogger;
   private filterOptions?: PollerFilterOptions;
+  private quotaLockManager: QuotaLockManager;
+  private quotaProbeIntervalSec: number;
+  private quotaAutoResume: boolean;
+  private lastQuotaLogAt: number = 0;
 
   constructor(
     backlog: BacklogClient,
@@ -34,7 +41,10 @@ export class BacklogPoller {
     intervalSec: number = 10,
     logger?: JsonlLogger,
     filterOptions?: PollerFilterOptions,
-    maxConcurrency: number = 2
+    maxConcurrency: number = 2,
+    quotaLockManager?: QuotaLockManager,
+    quotaProbeIntervalSec: number = 300,
+    quotaAutoResume: boolean = true
   ) {
     this.backlog = backlog;
     this.dispatcher = dispatcher;
@@ -44,6 +54,14 @@ export class BacklogPoller {
     this.logger = logger;
     this.filterOptions = filterOptions;
     this.maxConcurrency = Math.max(1, maxConcurrency);
+    this.quotaLockManager =
+      quotaLockManager || dispatcher.getQuotaLockManager() || new QuotaLockManager();
+    this.quotaProbeIntervalSec = quotaProbeIntervalSec;
+    this.quotaAutoResume = quotaAutoResume;
+  }
+
+  getQuotaLockManager(): QuotaLockManager {
+    return this.quotaLockManager;
   }
 
   getMaxConcurrency(): number {
@@ -115,7 +133,11 @@ export class BacklogPoller {
 
     while (this.isRunning) {
       try {
-        await this.pollOnce(false);
+        if (this.quotaLockManager.isLocked()) {
+          await this.handleQuotaLockedState();
+        } else {
+          await this.pollOnce(false);
+        }
       } catch (err: any) {
         console.error(`[Poller] ポーリングエラー:`, err);
         this.logger?.error("error", `ポーリング例外: ${err.message}`);
@@ -297,6 +319,177 @@ export class BacklogPoller {
     } catch (err: any) {
       console.error(`[Poller][${issue.issueKey}] チケット処理で例外発生:`, err);
       this.logger?.error("error", `チケット処理例外: ${err.message}`, { issueKey: issue.issueKey });
+    }
+  }
+
+  async handleQuotaLockedState(): Promise<void> {
+    const metadata = this.quotaLockManager.readMetadata();
+    if (!metadata) {
+      console.warn(`[Poller] クォータロックメタデータが不正なため、ロックを解除します。`);
+      this.quotaLockManager.release();
+      return;
+    }
+
+    const remainingMs = this.quotaLockManager.getTimeUntilResetMs();
+    const now = Date.now();
+
+    // ログ抑制: 30秒に1回だけ出力
+    if (now - this.lastQuotaLogAt >= 30000) {
+      this.lastQuotaLogAt = now;
+      if (remainingMs !== null && remainingMs > 0) {
+        const remainingMinutes = Math.ceil(remainingMs / 60000);
+        console.log(
+          `[Poller] ⏳ クォータ回復待機中 (リセット予定: ${metadata.resetsAt} / 残り 約${remainingMinutes}分)。Backlog ポーリング休止中... (ロック: ${this.quotaLockManager.getLockFilePath()})`
+        );
+      } else {
+        console.log(
+          `[Poller] ⏳ クォータ回復待機中 (定期プローブ中)。Backlog ポーリング休止中... (ロック: ${this.quotaLockManager.getLockFilePath()})`
+        );
+      }
+    }
+
+    // まだリセット予定時刻に達していない場合はプローブしない
+    if (remainingMs !== null && remainingMs > 0) {
+      return;
+    }
+
+    // リセット予定時刻が到来したか、元々不明の場合: プローブ間隔をチェック
+    const lastProbe = metadata.lastProbeAt ? new Date(metadata.lastProbeAt).getTime() : 0;
+    if (now - lastProbe < this.quotaProbeIntervalSec * 1000) {
+      return;
+    }
+
+    // プローブ実行
+    console.log(`[Poller] 🔍 クォータ回復チェック（プローブ）を実行します...`);
+    const runner = this.dispatcher.getRunner();
+    let probeResult: QuotaProbeResult = { recovered: true };
+
+    if (typeof runner.probeQuotaRecovery === "function") {
+      probeResult = await runner.probeQuotaRecovery();
+    }
+
+    if (probeResult.recovered) {
+      console.log(
+        `[Poller] 🎉 LLMクォータの回復を確認しました！クォータロックファイルを解除し、Backlogポーリングを再開します。`
+      );
+      this.logger?.info(
+        "quota_recovered",
+        `クォータ回復確認: ロック解除 (${this.quotaLockManager.getLockFilePath()})`,
+        {
+          data: { metadata },
+        }
+      );
+      this.quotaLockManager.release();
+
+      if (this.quotaAutoResume && metadata.issueKey) {
+        await this.resumeQuotaInterruptedIssue(metadata);
+      }
+    } else {
+      console.log(
+        `[Poller] ⚠️ クォータはまだ回復していません。引き続き休止待機します... (詳細: ${probeResult.errorMessage || "Quota reached"})`
+      );
+      let newResetsAt = metadata.resetsAt;
+      if (probeResult.resetDurationSec) {
+        newResetsAt = new Date(Date.now() + probeResult.resetDurationSec * 1000).toISOString();
+      }
+      this.quotaLockManager.updateMetadata({
+        lastProbeAt: new Date().toISOString(),
+        probeCount: (metadata.probeCount || 0) + 1,
+        resetsAt: newResetsAt,
+        resetDurationSec: probeResult.resetDurationSec ?? metadata.resetDurationSec,
+        resetDurationText: probeResult.resetDurationText ?? metadata.resetDurationText,
+      });
+    }
+  }
+
+  private getStatusNameForRole(role: AgentRole): string {
+    switch (role) {
+      case "spec-writer":
+        return "詳細設計中";
+      case "spec-reviewer":
+        return "設計レビュー中";
+      case "developer":
+        return "実装中";
+      case "code-reviewer":
+        return "技術レビュー中";
+      case "requirement-reviewer":
+        return "要件レビュー中";
+      default:
+        return "処理中";
+    }
+  }
+
+  private getPhaseTagForRole(role: AgentRole): string {
+    switch (role) {
+      case "spec-writer":
+        return PHASE_TAGS.specWriter;
+      case "spec-reviewer":
+        return PHASE_TAGS.specReviewer;
+      case "developer":
+        return PHASE_TAGS.developer;
+      case "code-reviewer":
+        return PHASE_TAGS.codeReviewer;
+      case "requirement-reviewer":
+        return PHASE_TAGS.requirementReviewer;
+      default:
+        return PHASE_TAGS.specWriter;
+    }
+  }
+
+  private async resumeQuotaInterruptedIssue(metadata: QuotaLockMetadata): Promise<void> {
+    try {
+      console.log(
+        `[Poller][${metadata.issueKey}] 🚀 クォータ回復により中断チケットの自動再開を実行します (担当ロール: [${metadata.role}])`
+      );
+      const issue = await this.backlog.getIssue(metadata.issueKey);
+      const isCustom = this.dispatcher.isCustomStatusMode(this.projectStatuses);
+      const role = metadata.role;
+
+      const resumeComment = [
+        `### 🚀【クォータ回復検知】自律処理を自動再開します`,
+        ``,
+        `ローカルプローブにより LLM クォータの回復を確認しました。`,
+        `中断していたエージェント **[${role}]** による自律処理を自動的に再開します。`,
+      ].join("\n");
+
+      if (isCustom) {
+        const targetStatusName = this.getStatusNameForRole(role);
+        const targetStatusId =
+          this.dispatcher.findStatusIdByName(this.projectStatuses, targetStatusName) ||
+          this.dispatcher.findStatusIdByName(this.projectStatuses, "処理中") ||
+          2;
+
+        if (typeof this.backlog.updateIssue === "function") {
+          await this.backlog.updateIssue(issue.issueKey, {
+            statusId: targetStatusId,
+            comment: resumeComment,
+          });
+        } else {
+          await this.backlog.updateIssueStatus(issue.issueKey, targetStatusId, resumeComment);
+        }
+      } else {
+        const phaseTag = this.getPhaseTagForRole(role);
+        const newSummary = formatSummaryWithPhase(issue.summary, phaseTag);
+        const targetStatusId =
+          this.dispatcher.findStatusIdByName(this.projectStatuses, "処理中") || 2;
+
+        if (typeof this.backlog.updateIssue === "function") {
+          await this.backlog.updateIssue(issue.issueKey, {
+            summary: newSummary,
+            statusId: targetStatusId,
+            comment: resumeComment,
+          });
+        } else {
+          await this.backlog.updateIssueStatus(issue.issueKey, targetStatusId, resumeComment);
+        }
+      }
+
+      // キャッシュをクリアして次のポーリングで即座に検知・着手させる
+      this.issueStatusCache.delete(issue.issueKey);
+      console.log(`[Poller][${metadata.issueKey}] 自動再開のステータス更新 & コメント投稿が完了しました`);
+    } catch (err: any) {
+      console.error(`[Poller][${metadata.issueKey}] 自動再開処理でエラー発生:`, err);
+      this.logger?.error("error", `自動再開処理例外: ${err.message}`, { issueKey: metadata.issueKey });
     }
   }
 

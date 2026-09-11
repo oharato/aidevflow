@@ -1,6 +1,7 @@
 import { spawn } from "child_process";
-import type { AgentRole, AgentContext, AgentResult, IAgentRunner } from "./types.js";
+import type { AgentRole, AgentContext, AgentResult, IAgentRunner, QuotaProbeResult } from "./types.js";
 import { buildAgentPrompt } from "./prompts.js";
+import { parseResetDuration } from "../daemon/quota-lock.js";
 
 /**
  * 出力テキストから差し戻し（Rejection）判定を行う。
@@ -200,6 +201,52 @@ export class AgyRunner implements IAgentRunner {
       });
     });
   }
+
+  async probeQuotaRecovery(): Promise<QuotaProbeResult> {
+    console.log("[AgyRunner] クォータ回復プローブを実行中 (agy 軽量チェック)...");
+    return new Promise<QuotaProbeResult>((resolve) => {
+      const child = spawn("agy", ["-p", "ping", "--dangerously-skip-permissions", "--print-timeout", "30s", "--output-format", "text"], {
+        cwd: this.workDir,
+        env: { ...process.env },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      child.stdout.on("data", (data) => {
+        stdout += data.toString();
+      });
+      child.stderr.on("data", (data) => {
+        stderr += data.toString();
+      });
+
+      child.on("close", (code) => {
+        const fullOutput = `${stdout}\n${stderr}`;
+        const isQuota = /quota|rate\s*limit|429/i.test(fullOutput);
+        if (isQuota) {
+          const resetInfo = parseResetDuration(fullOutput);
+          resolve({
+            recovered: false,
+            resetDurationSec: resetInfo?.durationSec ?? null,
+            resetDurationText: resetInfo?.durationText,
+            errorMessage: fullOutput.slice(0, 500).trim(),
+          });
+        } else {
+          resolve({
+            recovered: true,
+          });
+        }
+      });
+
+      child.on("error", (err) => {
+        resolve({
+          recovered: false,
+          errorMessage: err.message,
+        });
+      });
+    });
+  }
 }
 
 /**
@@ -258,12 +305,74 @@ export class ClaudeCliRunner implements IAgentRunner {
       });
     });
   }
+
+  async probeQuotaRecovery(): Promise<QuotaProbeResult> {
+    console.log("[ClaudeCliRunner] クォータ回復プローブを実行中 (claude 軽量チェック)...");
+    return new Promise<QuotaProbeResult>((resolve) => {
+      const child = spawn("claude", ["-p", "ping"], {
+        cwd: this.workDir,
+        env: { ...process.env },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      child.stdout.on("data", (data) => {
+        stdout += data.toString();
+      });
+      child.stderr.on("data", (data) => {
+        stderr += data.toString();
+      });
+
+      child.on("close", (code) => {
+        const fullOutput = `${stdout}\n${stderr}`;
+        const isQuota = /quota|rate\s*limit|429/i.test(fullOutput);
+        if (isQuota) {
+          const resetInfo = parseResetDuration(fullOutput);
+          resolve({
+            recovered: false,
+            resetDurationSec: resetInfo?.durationSec ?? null,
+            resetDurationText: resetInfo?.durationText,
+            errorMessage: fullOutput.slice(0, 500).trim(),
+          });
+        } else {
+          resolve({
+            recovered: true,
+          });
+        }
+      });
+
+      child.on("error", (err) => {
+        resolve({
+          recovered: false,
+          errorMessage: err.message,
+        });
+      });
+    });
+  }
 }
 
 /**
  * テスト/モック実行用ランナー
  */
 export class MockRunner implements IAgentRunner {
+  private quotaRecovered: boolean = true;
+
+  setQuotaRecovered(recovered: boolean): void {
+    this.quotaRecovered = recovered;
+  }
+
+  async probeQuotaRecovery(): Promise<QuotaProbeResult> {
+    console.log(`[MockRunner] クォータ回復プローブを実行中 (mock状態: ${this.quotaRecovered ? "回復済み" : "クォータ枯渇中"})...`);
+    return {
+      recovered: this.quotaRecovered,
+      errorMessage: this.quotaRecovered ? undefined : "Mock: Individual quota reached. Resets in 30m.",
+      resetDurationSec: this.quotaRecovered ? undefined : 1800,
+      resetDurationText: this.quotaRecovered ? undefined : "30m",
+    };
+  }
+
   async run(role: AgentRole, context: AgentContext): Promise<AgentResult> {
     console.log(`[MockRunner] Simulating role: ${role} on issue: ${context.issueKey}`);
     await new Promise((resolve) => setTimeout(resolve, 1500));

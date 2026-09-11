@@ -20,6 +20,7 @@ import {
   isInvestigationIssue,
   isFastModeIssue,
 } from "../backlog/prefix-helper.js";
+import { QuotaLockManager, parseResetDuration } from "./quota-lock.js";
 
 export interface ProcessIssueResult {
   handled: boolean;
@@ -27,6 +28,7 @@ export interface ProcessIssueResult {
   isEscalation?: boolean;
   rejectionCount?: number;
   newSummary?: string;
+  isQuota?: boolean;
 }
 
 /**
@@ -67,6 +69,7 @@ export class AgentDispatcher {
   private rejectionCounts: Map<string, number> = new Map();
   private lastRoleMap: Map<string, AgentRole> = new Map();
   private customStatusModeOverride?: boolean;
+  private quotaLockManager?: QuotaLockManager;
 
   constructor(
     backlog: BacklogClient,
@@ -77,7 +80,8 @@ export class AgentDispatcher {
     worktreeManager?: GitWorktreeManager,
     githubService?: GitHubService,
     maxRejectionCount: number = 3,
-    customStatusModeOverride?: boolean
+    customStatusModeOverride?: boolean,
+    quotaLockManager?: QuotaLockManager
   ) {
     this.backlog = backlog;
     this.runner = runner;
@@ -88,6 +92,19 @@ export class AgentDispatcher {
     this.githubService = githubService || new GitHubService();
     this.maxRejectionCount = maxRejectionCount;
     this.customStatusModeOverride = customStatusModeOverride;
+    this.quotaLockManager = quotaLockManager;
+  }
+
+  setQuotaLockManager(manager?: QuotaLockManager): void {
+    this.quotaLockManager = manager;
+  }
+
+  getQuotaLockManager(): QuotaLockManager | undefined {
+    return this.quotaLockManager;
+  }
+
+  getRunner(): IAgentRunner {
+    return this.runner;
   }
 
   setCustomStatusMode(enabled?: boolean): void {
@@ -495,13 +512,40 @@ export class AgentDispatcher {
     let escalationReason = "";
     let currentRejectionCount = this.getRejectionCount(issue.issueKey);
 
+    let isQuota = false;
+    let resetInfo: { durationSec: number; durationText: string } | null = null;
+
     if (!result.success) {
       isEscalation = true;
-      const isQuota =
+      isQuota =
         /quota|rate\s*limit|429/i.test(output) ||
         /quota|rate\s*limit|429/i.test(result.summary);
       if (isQuota) {
+        resetInfo = parseResetDuration(output || result.summary);
         escalationReason = `エージェント [${role}] 実行中にLLMクォータ上限（Quota reached）を検知しました`;
+        if (resetInfo) {
+          escalationReason += ` (リセット予定: ${resetInfo.durationText}後)`;
+        }
+
+        if (this.quotaLockManager) {
+          const resetsAt = resetInfo
+            ? new Date(Date.now() + resetInfo.durationSec * 1000).toISOString()
+            : null;
+          this.quotaLockManager.acquire({
+            role,
+            issueKey: issue.issueKey,
+            errorMessage: (output || result.summary).slice(0, 1000).trim(),
+            resetsAt,
+            resetDurationSec: resetInfo ? resetInfo.durationSec : null,
+            resetDurationText: resetInfo?.durationText,
+          });
+          console.warn(`[Dispatcher] 🔒 クォータロックファイルを作成しました: ${this.quotaLockManager.getLockFilePath()}`);
+          this.logger?.warn("quota_locked", `クォータ制限検知: ロックファイル作成 (${this.quotaLockManager.getLockFilePath()})`, {
+            issueKey: issue.issueKey,
+            role,
+            data: { resetsAt, resetInfo },
+          });
+        }
       } else {
         escalationReason = `エージェント [${role}] が異常終了またはタイムアウトしました (終了コード異常)`;
       }
@@ -618,16 +662,23 @@ export class AgentDispatcher {
       });
 
       const headerTitle = !result.success
-        ? `### ⚠️ 【自律パイプライン一時停止】エージェント実行エラー / クォータ上限を検知しました`
+        ? (isQuota
+            ? `### ⚠️ 【自律パイプライン一時停止】エージェント実行エラー / クォータ上限を検知しました (回復待機モード移行)`
+            : `### ⚠️ 【自律パイプライン一時停止】エージェント実行エラー / クォータ上限を検知しました`)
         : `### ⚠️ 【人間への確認依頼】自律パイプラインを一時停止しました`;
 
       const sectionTitle = !result.success
         ? `#### 実行ログ・エラー詳細:`
         : `#### 🤖 [AI] からの質問・論点要約:`;
 
-      const restartGuide = !result.success
-        ? `1. エラー内容（クォータ制限のリセット待ち、または設定・コード）をご確認ください。\n2. 再開準備が整ったら、ステータスを **「処理中」** に変更してください。\n3. デーモンが検知し、エージェント [${role}] から自動再開します。`
-        : `1. 本チケットに回答コメント（指示・方針）を投稿してください。\n2. ステータスを **「処理中」**（カスタム状態利用時は「詳細設計中」または「実装中」）に変更してください。\n3. デーモンが回答内容を読み取り、カウンターをリセットして自動再開します。`;
+      let restartGuide: string;
+      if (isQuota) {
+        restartGuide = `1. **【自動再開（推奨）】**: デーモンがローカルでクォータ回復待機モードに入りました（Backlogポーリング休止中）。クォータ回復（リセット予定: ${resetInfo?.durationText || "時間経過"}）が確認され次第、本チケットは自動的に再開されます（手動操作は不要です）。\n2. **【手動再開】**: 直ちに再開させたい場合は、クォータロックファイル（\`.aidevflow.quota.lock\`）を削除し、ステータスを **「処理中」** に変更してください。`;
+      } else if (!result.success) {
+        restartGuide = `1. エラー内容（設定・コード・環境）をご確認ください。\n2. 再開準備が整ったら、ステータスを **「処理中」** に変更してください。\n3. デーモンが検知し、エージェント [${role}] から自動再開します。`;
+      } else {
+        restartGuide = `1. 本チケットに回答コメント（指示・方針）を投稿してください。\n2. ステータスを **「処理中」**（カスタム状態利用時は「詳細設計中」または「実装中」）に変更してください。\n3. デーモンが回答内容を読み取り、カウンターをリセットして自動再開します。`;
+      }
 
       commentLines.push(
         headerTitle,
@@ -763,6 +814,7 @@ export class AgentDispatcher {
         isEscalation,
         rejectionCount: currentRejectionCount,
         newSummary,
+        isQuota,
       };
     }
 
@@ -842,6 +894,7 @@ export class AgentDispatcher {
       isEscalation,
       rejectionCount: currentRejectionCount,
       newSummary,
+      isQuota,
     };
   }
 }

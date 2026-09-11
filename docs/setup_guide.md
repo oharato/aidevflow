@@ -49,6 +49,9 @@ cp .env.example .env
 | `DRY_RUN` | - | `false` | `true` の場合、Git push や PR 作成をシミュレート |
 | `LOG_FILE_PATH` | - | `logs/aidevflow.jsonl` | 構造化ログ（JSONL）の出力パス |
 | `AIDEVFLOW_HOME` | - | `~/aidevflow` | リポジトリ・Worktree のベース配置ディレクトリ |
+| `QUOTA_LOCK_FILE_PATH`| - | `.aidevflow.quota.lock` | クォータ枯渇ロックファイルの配置パス |
+| `QUOTA_PROBE_INTERVAL_SEC`| - | `300` | クォータ回復プローブの確認間隔（秒） |
+| `QUOTA_AUTO_RESUME` | - | `true` | クォータ回復時の中断チケット自動再開 (`true`/`false`) |
 
 ---
 

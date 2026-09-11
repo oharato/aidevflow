@@ -32,6 +32,9 @@ export interface AppConfig {
   requireAiTag?: boolean;
   agentTimeout: string;
   maxConcurrency: number;
+  quotaLockFilePath: string;
+  quotaProbeIntervalSec: number;
+  quotaAutoResume: boolean;
 }
 
 export function loadConfig(): AppConfig {
@@ -56,6 +59,9 @@ export function loadConfig(): AppConfig {
   const requireAiTag = process.env.REQUIRE_AI_TAG === "true";
   const rawConcurrency = process.env.MAX_CONCURRENCY || process.env.AIDEVFLOW_CONCURRENCY;
   const maxConcurrency = Math.max(1, rawConcurrency ? Number(rawConcurrency) || 2 : 2);
+  const quotaLockFilePath = process.env.QUOTA_LOCK_FILE_PATH || ".aidevflow.quota.lock";
+  const quotaProbeIntervalSec = Number(process.env.QUOTA_PROBE_INTERVAL_SEC) || 300;
+  const quotaAutoResume = process.env.QUOTA_AUTO_RESUME !== "false";
 
   return {
     backlogSpaceId: spaceId,
@@ -79,5 +85,8 @@ export function loadConfig(): AppConfig {
     requireAiTag,
     agentTimeout: process.env.AGENT_TIMEOUT || "20m",
     maxConcurrency,
+    quotaLockFilePath,
+    quotaProbeIntervalSec,
+    quotaAutoResume,
   };
 }
