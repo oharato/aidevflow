@@ -488,7 +488,17 @@ export class AgentDispatcher {
     let escalationReason = "";
     let currentRejectionCount = this.getRejectionCount(issue.issueKey);
 
-    if (result.isRejection) {
+    if (!result.success) {
+      isEscalation = true;
+      const isQuota =
+        /quota|rate\s*limit|429/i.test(output) ||
+        /quota|rate\s*limit|429/i.test(result.summary);
+      if (isQuota) {
+        escalationReason = `エージェント [${role}] 実行中にLLMクォータ上限（Quota reached）を検知しました`;
+      } else {
+        escalationReason = `エージェント [${role}] が異常終了またはタイムアウトしました (終了コード異常)`;
+      }
+    } else if (result.isRejection) {
       currentRejectionCount += 1;
       this.rejectionCounts.set(issue.issueKey, currentRejectionCount);
       console.log(`[Dispatcher] 差し戻しを検知: ${issue.issueKey} (累計: ${currentRejectionCount} / 上限: ${this.maxRejectionCount})`);
@@ -497,7 +507,7 @@ export class AgentDispatcher {
         isEscalation = true;
         escalationReason = `差し戻し上限（${this.maxRejectionCount}回）に達しました（現在: ${currentRejectionCount}回）`;
       }
-    } else if (result.success) {
+    } else {
       // 承認または完了時は差し戻しカウンターをリセット
       this.resetRejectionCount(issue.issueKey);
     }
@@ -514,6 +524,7 @@ export class AgentDispatcher {
     let newSummary: string | undefined;
     let nextStatusId: number | null = null;
     const isFinalApproval =
+      result.success &&
       !result.isRejection &&
       !isEscalation &&
       (isInvestigation ? role === "curator" : role === "editor");
@@ -524,7 +535,9 @@ export class AgentDispatcher {
       if (isEscalation) {
         nextStatusTarget = "確認待ち";
       } else {
-        nextStatusTarget = this.getNextStatusName(role, result.isRejection ?? false, isInvestigation);
+        nextStatusTarget = result.success
+          ? this.getNextStatusName(role, result.isRejection ?? false, isInvestigation)
+          : issue.status.name;
       }
       nextStatusId = this.findStatusIdByName(projectStatuses, nextStatusTarget);
     } else {
@@ -536,7 +549,9 @@ export class AgentDispatcher {
         // 人間に気付かせるため標準ステータス「未対応」へ
         nextStatusId = this.findStatusIdByName(projectStatuses, "未対応") || 1;
       } else {
-        const nextPhaseTag = getNextPhaseTag(role, result.isRejection ?? false, isInvestigation);
+        const nextPhaseTag = result.success
+          ? getNextPhaseTag(role, result.isRejection ?? false, isInvestigation)
+          : (parsePhaseFromSummary(issue.summary).tag || getNextPhaseTag(role, false, isInvestigation));
         newSummary = formatSummaryWithPhase(issue.summary, nextPhaseTag);
         nextStatusTarget = `[${nextPhaseTag}]`;
         if (isFinalApproval) {
@@ -564,12 +579,22 @@ export class AgentDispatcher {
     }
 
     if (isEscalation) {
-      const resumeRole: AgentRole =
-        role === "curator"
-          ? "director"
-          : role === "critic" || role === "editor"
-          ? "artist"
-          : role;
+      let resumeRole: AgentRole;
+      if (!result.success) {
+        // エージェント実行失敗（quota上限やエラー）時は、同じフェーズを再試行するため同一ロールを設定
+        resumeRole = role;
+      } else if (currentRejectionCount >= this.maxRejectionCount) {
+        // 差し戻し上限によるエスカレーション時は修正担当ロールへ戻す
+        resumeRole =
+          role === "curator"
+            ? "director"
+            : role === "critic" || role === "editor"
+            ? "artist"
+            : role;
+      } else {
+        // エージェントからの質問・確認要請の場合は同一ロールで回答を受け取る
+        resumeRole = role;
+      }
       this.lastRoleMap.set(issue.issueKey, resumeRole);
       console.warn(`[Dispatcher] ⚠️ 人間への確認依頼（エスカレーション）を検知: ${escalationReason}`);
       this.logger?.warn("human_escalation", `人間への確認依頼: ${issue.issueKey} (${escalationReason})`, {
@@ -585,27 +610,37 @@ export class AgentDispatcher {
         },
       });
 
+      const headerTitle = !result.success
+        ? `### ⚠️ 【自律パイプライン一時停止】エージェント実行エラー / クォータ上限を検知しました`
+        : `### ⚠️ 【人間への確認依頼】自律パイプラインを一時停止しました`;
+
+      const sectionTitle = !result.success
+        ? `#### 実行ログ・エラー詳細:`
+        : `#### 🤖 [AI] からの質問・論点要約:`;
+
+      const restartGuide = !result.success
+        ? `1. エラー内容（クォータ制限のリセット待ち、または設定・コード）をご確認ください。\n2. 再開準備が整ったら、ステータスを **「処理中」** に変更してください。\n3. デーモンが検知し、エージェント [${role}] から自動再開します。`
+        : `1. 本チケットに回答コメント（指示・方針）を投稿してください。\n2. ステータスを **「処理中」**（カスタム状態利用時は「詳細設計中」または「実装中」）に変更してください。\n3. デーモンが回答内容を読み取り、カウンターをリセットして自動再開します。`;
+
       commentLines.push(
-        `### [注意] 【人間への確認依頼】自律パイプラインを一時停止しました`,
+        headerTitle,
         ``,
         `以下の理由により自律処理を停止し、ステータスを **「確認待ち」** に変更しました。`,
         ``,
         `- **理由**: ${escalationReason}`,
         `- **現在のフェーズ**: ${role} (${statusName})`,
-        `- **差し戻し回数**: ${currentRejectionCount} / ${this.maxRejectionCount}`,
+        ...(result.isRejection ? [`- **差し戻し回数**: ${currentRejectionCount} / ${this.maxRejectionCount}`] : []),
         `- **対象リポジトリ**: ${worktreeTargets.map((t) => t.repoName).join(", ")}`,
         `- **作業 Worktree**: \`${executionWorkDir}\``,
         ...(newSummary ? [`- **新件名**: \`${newSummary}\``] : []),
         ...prSectionLines,
         ``,
-        `#### [AI] からの質問・論点要約:`,
+        sectionTitle,
         result.output,
         ``,
         `---`,
-        `#### [手順] 人間側の対応手順 (再開方法):`,
-        `1. 本チケットに回答コメント（指示・方針）を投稿してください。`,
-        `2. ステータスを **「処理中」**（カスタム状態利用時は「詳細設計中」または「実装中」）に変更してください。`,
-        `3. デーモンが回答内容を読み取り、カウンターをリセットして自動再開します。`
+        `#### 👤 人間側の対応手順 (再開方法):`,
+        restartGuide
       );
     } else if (isFinalApproval) {
       if (isInvestigation) {
@@ -683,9 +718,13 @@ export class AgentDispatcher {
         );
       }
 
+      const resultLabel = result.success
+        ? (result.isRejection ? "差し戻し" : "成功 ([承認])")
+        : "失敗 ([エラー])";
+
       commentLines.push(
         `### [AI] aidevflow [${role}] 処理報告`,
-        `**結果**: ${result.success ? "成功" : "失敗"} (${result.isRejection ? "[差し戻し]" : "[完了/承認]"})`,
+        `**結果**: ${resultLabel}`,
         `**ブランチ**: \`${issue.issueKey}\``,
         ...prSectionLines,
         `**所要時間**: ${(durationMs / 1000).toFixed(1)}s`,

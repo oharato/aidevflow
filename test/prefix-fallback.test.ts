@@ -308,4 +308,45 @@ describe("Backlogフリープラン（標準4状態のみ）件名プレフィ�
     expect(lastUpdatedParams.summary).toBe("[技術レビュー中] 決済APIリファクタリング");
     expect(lastUpdatedParams.statusId).toBe(2); // 処理中
   });
+
+  it("プレフィックスモードにおいて、criticがQuota上限で失敗した際に[要件レビュー中]に進まず[確認待ち]（未対応）に一時停止すること", async () => {
+    const quotaErrorOutput = `[エラー] エージェント [critic] が異常終了またはタイムアウトしました (終了コード: 1)。
+エラー詳細:
+error: Individual quota reached. Resets in 2h21m6s.`;
+
+    const runner = new MockCustomRunner(() => ({
+      role: "critic",
+      success: false,
+      isRejection: false,
+      summary: "エージェント [critic] が実行されました (終了コード: 1)",
+      output: quotaErrorOutput,
+    }));
+
+    const dispatcher = new AgentDispatcher(
+      mockBacklog,
+      runner,
+      "/mock/payment-service",
+      false,
+      logger,
+      mockWorktreeManager,
+      mockGitHubService,
+      3
+    );
+
+    const criticIssue: BacklogIssue = {
+      ...baseIssue,
+      summary: "[技術レビュー中] 決済APIリファクタリング",
+      status: standardStatuses[1], // 処理中
+    };
+
+    const res = await dispatcher.processIssue(criticIssue, standardStatuses);
+
+    // [要件レビュー中] ではなく [確認待ち]
+    expect(res.isEscalation).toBe(true);
+    expect(res.newSummary).toBe("[確認待ち] 決済APIリファクタリング");
+    expect(lastUpdatedParams.summary).toBe("[確認待ち] 決済APIリファクタリング");
+    expect(lastUpdatedParams.statusId).toBe(1); // 人間に通知するため「未対応」
+    expect(lastPostedComment).toContain("LLMクォータ上限（Quota reached）を検知しました");
+  });
 });
+

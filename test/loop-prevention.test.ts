@@ -334,4 +334,81 @@ describe("差し戻し無限ループ防止 & 人間確認エスカレーショ�
     expect(res.isEscalation).toBe(false);
     expect(res.nextStatusTarget).toBe("完了");
   });
+
+  it("エージェント実行がQuota上限エラーで失敗した際、次フェーズへ進まず「確認待ち」へ安全に一時停止すること", async () => {
+    const quotaErrorOutput = `[エラー] エージェント [critic] が異常終了またはタイムアウトしました (終了コード: 1)。
+直前のツール実行: なし
+エラー詳細:
+error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h21m6s.`;
+
+    const runner = new MockCustomRunner(() => ({
+      role: "critic",
+      success: false,
+      isRejection: false,
+      summary: "エージェント [critic] が実行されました (終了コード: 1)",
+      output: quotaErrorOutput,
+    }));
+
+    const dispatcher = new AgentDispatcher(
+      mockBacklog,
+      runner,
+      "/mock/repo",
+      false,
+      logger,
+      mockWorktreeManager,
+      mockGitHubService,
+      3
+    );
+
+    const criticIssue: BacklogIssue = {
+      ...baseIssue,
+      status: dummyStatuses[4], // 技術レビュー中 (critic)
+    };
+
+    const res = await dispatcher.processIssue(criticIssue, dummyStatuses);
+    expect(res.isEscalation).toBe(true);
+    expect(res.nextStatusTarget).toBe("確認待ち");
+    expect(lastUpdatedStatusId).toBe(7); // 確認待ち
+    expect(lastPostedComment).toContain("【自律パイプライン一時停止】エージェント実行エラー / クォータ上限を検知しました");
+    expect(lastPostedComment).toContain("LLMクォータ上限（Quota reached）を検知しました");
+    expect(lastPostedComment).toContain("Individual quota reached");
+  });
+
+  it("最終工程のEditor実行が失敗した際、完了（isFinalApproval）にならず安全に一時停止すること", async () => {
+    const quotaErrorOutput = `[エラー] エージェント [editor] が異常終了またはタイムアウトしました (終了コード: 1)。
+エラー詳細:
+error: Individual quota reached. Resets in 1h59m24s.`;
+
+    const runner = new MockCustomRunner(() => ({
+      role: "editor",
+      success: false,
+      isRejection: false,
+      summary: "エージェント [editor] が実行されました (終了コード: 1)",
+      output: quotaErrorOutput,
+    }));
+
+    const dispatcher = new AgentDispatcher(
+      mockBacklog,
+      runner,
+      "/mock/repo",
+      false,
+      logger,
+      mockWorktreeManager,
+      mockGitHubService,
+      3
+    );
+
+    const editorIssue: BacklogIssue = {
+      ...baseIssue,
+      status: dummyStatuses[5], // 要件レビュー中 (editor)
+    };
+
+    const res = await dispatcher.processIssue(editorIssue, dummyStatuses);
+    expect(res.isEscalation).toBe(true);
+    expect(res.nextStatusTarget).toBe("確認待ち");
+    expect(lastUpdatedStatusId).toBe(7); // 確認待ち (完了の8にならない)
+    expect(lastPostedComment).not.toContain("【レビュー依頼】AIエージェントによる全工程が完了しました");
+    expect(lastPostedComment).toContain("【自律パイプライン一時停止】");
+  });
 });
+
