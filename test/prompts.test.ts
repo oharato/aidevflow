@@ -22,6 +22,19 @@ describe("エージェントプロンプト生成 (buildAgentPrompt)", () => {
     expect(prompt).toContain("7日以上のクールダウン");
   });
 
+  it("Code-Reviewer / QA / Developer のプロンプトにGitコンフリクト点検観点が含まれていること", () => {
+    const reviewerPrompt = buildAgentPrompt("code-reviewer", dummyContext);
+    expect(reviewerPrompt).toContain("ベースブランチとのコンフリクト有無");
+    expect(reviewerPrompt).toContain("Gitコンフリクトの有無、およびコード内にコンフリクトマーカー");
+    expect(reviewerPrompt).toContain("Gitコンフリクト");
+
+    const qaPrompt = buildAgentPrompt("qa", dummyContext);
+    expect(qaPrompt).toContain("ベースブランチとの競合やコンフリクトマーカーの残留など、成果物のマージを阻害する不整合がないか確認する");
+
+    const developerPrompt = buildAgentPrompt("developer", dummyContext);
+    expect(developerPrompt).toContain("ベースブランチ（main/master等）とのGitコンフリクトが発生していないこと、およびソースコード内にコンフリクトマーカー");
+  });
+
   it("Developer (実装) のプロンプトに最新安定版の依存選定・固定の指示が含まれていること", () => {
     const prompt = buildAgentPrompt("developer", dummyContext);
 
@@ -41,7 +54,7 @@ describe("エージェントプロンプト生成 (buildAgentPrompt)", () => {
     expect(qaPrompt).toContain("あなたは【qa（要件的観点レビューエージェント）】です。");
   });
 
-  it("Fastモード時のCode-Reviewerプロンプトに統合レビュー（技術観点＋要件充足度）の指示が含まれること", () => {
+  it("Fastモード時のCode-Reviewerプロンプトに統合レビュー（技術観点＋要件充足度＋コンフリクト点検）の指示が含まれること", () => {
     const fastContext: AgentContext = {
       ...dummyContext,
       isFastMode: true,
@@ -51,6 +64,8 @@ describe("エージェントプロンプト生成 (buildAgentPrompt)", () => {
     expect(prompt).toContain("あなたは【code-reviewer（統合レビューエージェント）】です。");
     expect(prompt).toContain("本タスクは【Fastモード（軽量パイプライン）】です。");
     expect(prompt).toContain("技術的観点と要件充足度のレビューを1回に統合して実施します");
+    expect(prompt).toContain("ベースブランチとのコンフリクト有無");
+    expect(prompt).toContain("Gitコンフリクトの有無、およびコード内にコンフリクトマーカー");
     expect(prompt).toContain("承認（LGTM・全工程完了）");
   });
 });
