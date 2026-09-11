@@ -31,6 +31,7 @@ export interface AppConfig {
   targetCategory?: string;
   requireAiTag?: boolean;
   agentTimeout: string;
+  maxConcurrency: number;
 }
 
 export function loadConfig(): AppConfig {
@@ -53,6 +54,8 @@ export function loadConfig(): AppConfig {
   const targetIssueType = process.env.TARGET_ISSUE_TYPE || undefined;
   const targetCategory = process.env.TARGET_CATEGORY || undefined;
   const requireAiTag = process.env.REQUIRE_AI_TAG === "true";
+  const rawConcurrency = process.env.MAX_CONCURRENCY || process.env.AIDEVFLOW_CONCURRENCY;
+  const maxConcurrency = Math.max(1, rawConcurrency ? Number(rawConcurrency) || 2 : 2);
 
   return {
     backlogSpaceId: spaceId,
@@ -75,5 +78,6 @@ export function loadConfig(): AppConfig {
     targetCategory,
     requireAiTag,
     agentTimeout: process.env.AGENT_TIMEOUT || "20m",
+    maxConcurrency,
   };
 }

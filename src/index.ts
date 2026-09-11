@@ -98,18 +98,23 @@ async function main() {
       targetIssueType: config.targetIssueType,
       targetCategory: config.targetCategory,
       requireAiTag: config.requireAiTag,
-    }
+    },
+    config.maxConcurrency
   );
 
-  const handleShutdown = () => {
-    console.log("\nシャットダウン要求を受信しました。終了します...");
-    poller.stop();
+  const handleShutdown = async () => {
+    console.log("\nシャットダウン要求を受信しました。終了処理を実行します...");
+    await poller.stop();
     lock.release();
     process.exit(0);
   };
 
-  process.on("SIGINT", handleShutdown);
-  process.on("SIGTERM", handleShutdown);
+  process.on("SIGINT", () => {
+    handleShutdown().catch(() => process.exit(1));
+  });
+  process.on("SIGTERM", () => {
+    handleShutdown().catch(() => process.exit(1));
+  });
 
   await poller.start();
 }

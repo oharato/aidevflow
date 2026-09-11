@@ -15,8 +15,11 @@ export class BacklogPoller {
   private projectKey: string;
   private targetIssueKey?: string;
   private intervalMs: number;
+  private maxConcurrency: number;
   private isRunning: boolean = false;
-  private isProcessing: boolean = false;
+  private isPolling: boolean = false;
+  private inFlightIssues: Set<string> = new Set();
+  private activeTasks: Map<string, Promise<void>> = new Map();
   private projectId: number | null = null;
   private projectStatuses: BacklogStatus[] = [];
   private issueStatusCache: Map<string, string> = new Map();
@@ -30,7 +33,8 @@ export class BacklogPoller {
     targetIssueKey?: string,
     intervalSec: number = 10,
     logger?: JsonlLogger,
-    filterOptions?: PollerFilterOptions
+    filterOptions?: PollerFilterOptions,
+    maxConcurrency: number = 2
   ) {
     this.backlog = backlog;
     this.dispatcher = dispatcher;
@@ -39,6 +43,24 @@ export class BacklogPoller {
     this.intervalMs = intervalSec * 1000;
     this.logger = logger;
     this.filterOptions = filterOptions;
+    this.maxConcurrency = Math.max(1, maxConcurrency);
+  }
+
+  getMaxConcurrency(): number {
+    return this.maxConcurrency;
+  }
+
+  getInFlightIssues(): string[] {
+    return Array.from(this.inFlightIssues);
+  }
+
+  getActiveCount(): number {
+    return this.inFlightIssues.size;
+  }
+
+  async waitForActiveTasks(): Promise<void> {
+    if (this.activeTasks.size === 0) return;
+    await Promise.allSettled(Array.from(this.activeTasks.values()));
   }
 
   async init(): Promise<void> {
@@ -59,6 +81,8 @@ export class BacklogPoller {
       console.log(`[Poller] 動作モード: 【件名プレフィックスモード】（標準4状態 ＋ [詳細設計中] 等の件名タグを使用）`);
     }
 
+    console.log(`[Poller] 最大同時並行チケット数: ${this.maxConcurrency}`);
+
     if (this.filterOptions?.targetIssueType) {
       console.log(`[Poller] フィルタ: 種別="${this.filterOptions.targetIssueType}" のみ対象`);
     }
@@ -72,13 +96,13 @@ export class BacklogPoller {
 
   async start(): Promise<void> {
     this.isRunning = true;
-    console.log(`[Poller] デーモンを開始しました。プロジェクト: "${this.projectKey}", ポーリング間隔: ${this.intervalMs / 1000}s`);
+    console.log(`[Poller] デーモンを開始しました。プロジェクト: "${this.projectKey}", ポーリング間隔: ${this.intervalMs / 1000}s, 並行数: ${this.maxConcurrency}`);
     if (this.targetIssueKey) {
       console.log(`[Poller] (特定チケット限定モード: ${this.targetIssueKey})`);
     }
 
     this.logger?.info("daemon_start", `デーモン起動: プロジェクト "${this.projectKey}"`, {
-      data: { projectKey: this.projectKey, targetIssueKey: this.targetIssueKey },
+      data: { projectKey: this.projectKey, targetIssueKey: this.targetIssueKey, maxConcurrency: this.maxConcurrency },
     });
 
     try {
@@ -91,7 +115,7 @@ export class BacklogPoller {
 
     while (this.isRunning) {
       try {
-        await this.pollOnce();
+        await this.pollOnce(false);
       } catch (err: any) {
         console.error(`[Poller] ポーリングエラー:`, err);
         this.logger?.error("error", `ポーリング例外: ${err.message}`);
@@ -100,15 +124,16 @@ export class BacklogPoller {
     }
   }
 
-  stop(): void {
-    console.log(`[Poller] デーモン停止シグナルを受信しました。`);
+  async stop(): Promise<void> {
+    console.log(`[Poller] デーモン停止シグナルを受信しました。実行中のタスク完了を待機します (実行中: ${this.inFlightIssues.size}件)...`);
     this.isRunning = false;
+    await this.waitForActiveTasks();
+    console.log(`[Poller] 全アクティブタスクが完了しました。`);
     this.logger?.info("daemon_stop", `デーモン停止`);
   }
 
-  async pollOnce(): Promise<void> {
-    if (this.isProcessing) {
-      console.log(`[Poller] 前回のタスクが実行中のため、今回のポーリングはスキップします。`);
+  async pollOnce(waitForCompletion: boolean = true): Promise<void> {
+    if (this.isPolling) {
       return;
     }
 
@@ -116,7 +141,13 @@ export class BacklogPoller {
       return;
     }
 
-    this.isProcessing = true;
+    const availableSlots = this.maxConcurrency - this.inFlightIssues.size;
+    if (availableSlots <= 0) {
+      console.log(`[Poller] 最大並行数 (${this.maxConcurrency}) に達しているため新規ディスパッチを待機中 (実行中: ${Array.from(this.inFlightIssues).join(", ")})`);
+      return;
+    }
+
+    this.isPolling = true;
     try {
       let issuesToScan: BacklogIssue[] = [];
 
@@ -175,14 +206,13 @@ export class BacklogPoller {
         }
       }
 
-      if (actionableIssues.length === 0) {
-        process.stdout.write(".");
-        return;
-      }
-
-      console.log(`\n[Poller] 処理対象のチケットを検知しました: ${actionableIssues.length}件`);
-
+      // 新規に着手可能なチケットを抽出 (既に実行中のものや前回から変更のないものを除外)
+      const issuesToDispatch: BacklogIssue[] = [];
       for (const issue of actionableIssues) {
+        if (this.inFlightIssues.has(issue.issueKey)) {
+          continue; // 既にエージェント実行中
+        }
+
         const role = this.dispatcher.resolveRole(issue, this.projectStatuses);
         const lastFingerprint = this.issueStatusCache.get(issue.issueKey);
         const currentFingerprint = isCustom
@@ -190,35 +220,83 @@ export class BacklogPoller {
           : `${issue.status.name}::${issue.summary}::${role || "none"}::${issue.updated || ""}`;
 
         if (lastFingerprint === currentFingerprint) {
-          continue;
+          continue; // 変更なし
         }
 
-        // 人間介入後の再開検知: 「確認待ち」からの復帰時、差し戻しカウンターをリセット
-        const wasWaitingConfirmation =
-          lastFingerprint &&
-          (lastFingerprint.includes("確認待ち") || lastFingerprint.includes("confirmHuman"));
-
-        if (wasWaitingConfirmation) {
-          console.log(`[Poller] 「確認待ち」からの復帰を検知しました。差し戻しカウンターをリセットします: ${issue.issueKey}`);
-          this.dispatcher.resetRejectionCount(issue.issueKey);
-          this.logger?.info("issue_detected", `人間確認後の自律再開を検知 (カウンターリセット): ${issue.issueKey}`, {
-            issueKey: issue.issueKey,
-            data: { previous: lastFingerprint, current: currentFingerprint },
-          });
-        }
-
-        console.log(`[Poller] チケット処理開始: ${issue.issueKey} [${issue.summary}] (ステータス: "${issue.status.name}")`);
-        const result = await this.dispatcher.processIssue(issue, this.projectStatuses);
-
-        if (result.handled) {
-          const nextFingerprint = isCustom
-            ? `${result.nextStatusTarget || issue.status.name}::${role || "none"}`
-            : `${result.nextStatusTarget || issue.status.name}::${result.newSummary || issue.summary}::${role || "none"}`;
-          this.issueStatusCache.set(issue.issueKey, nextFingerprint);
+        issuesToDispatch.push(issue);
+        if (issuesToDispatch.length >= availableSlots) {
+          break;
         }
       }
+
+      if (issuesToDispatch.length === 0) {
+        if (this.inFlightIssues.size === 0) {
+          process.stdout.write(".");
+        }
+        return;
+      }
+
+      console.log(`\n[Poller] 新規着手可能チケットを検知: ${issuesToDispatch.length}件 (空きスロット: ${availableSlots}/${this.maxConcurrency})`);
+
+      const launchedPromises: Promise<void>[] = [];
+      for (const issue of issuesToDispatch) {
+        const issueKey = issue.issueKey;
+        this.inFlightIssues.add(issueKey);
+
+        const taskPromise = this.executeIssueTask(issue, isCustom)
+          .finally(() => {
+            this.inFlightIssues.delete(issueKey);
+            this.activeTasks.delete(issueKey);
+          });
+
+        this.activeTasks.set(issueKey, taskPromise);
+        launchedPromises.push(taskPromise);
+      }
+
+      if (waitForCompletion && launchedPromises.length > 0) {
+        await Promise.allSettled(launchedPromises);
+      }
     } finally {
-      this.isProcessing = false;
+      this.isPolling = false;
+    }
+  }
+
+  private async executeIssueTask(issue: BacklogIssue, isCustom: boolean): Promise<void> {
+    const role = this.dispatcher.resolveRole(issue, this.projectStatuses);
+    const lastFingerprint = this.issueStatusCache.get(issue.issueKey);
+    const currentFingerprint = isCustom
+      ? `${issue.status.name}::${role || "none"}::${issue.updated || ""}`
+      : `${issue.status.name}::${issue.summary}::${role || "none"}::${issue.updated || ""}`;
+
+    // 人間介入後の再開検知: 「確認待ち」からの復帰時、差し戻しカウンターをリセット
+    const wasWaitingConfirmation =
+      lastFingerprint &&
+      (lastFingerprint.includes("確認待ち") || lastFingerprint.includes("confirmHuman"));
+
+    if (wasWaitingConfirmation) {
+      console.log(`[Poller][${issue.issueKey}] 「確認待ち」からの復帰を検知しました。差し戻しカウンターをリセットします`);
+      this.dispatcher.resetRejectionCount(issue.issueKey);
+      this.logger?.info("issue_detected", `人間確認後の自律再開を検知 (カウンターリセット): ${issue.issueKey}`, {
+        issueKey: issue.issueKey,
+        data: { previous: lastFingerprint, current: currentFingerprint },
+      });
+    }
+
+    console.log(`[Poller][${issue.issueKey}] チケット処理開始: [${issue.summary}] (ステータス: "${issue.status.name}", 担当: [${role}]) [並行実行中: ${this.inFlightIssues.size}/${this.maxConcurrency}]`);
+
+    try {
+      const result = await this.dispatcher.processIssue(issue, this.projectStatuses);
+
+      if (result.handled) {
+        const nextFingerprint = isCustom
+          ? `${result.nextStatusTarget || issue.status.name}::${role || "none"}`
+          : `${result.nextStatusTarget || issue.status.name}::${result.newSummary || issue.summary}::${role || "none"}`;
+        this.issueStatusCache.set(issue.issueKey, nextFingerprint);
+      }
+      console.log(`[Poller][${issue.issueKey}] チケット処理完了 (結果: ${result.handled ? "成功/更新" : "未処理"})`);
+    } catch (err: any) {
+      console.error(`[Poller][${issue.issueKey}] チケット処理で例外発生:`, err);
+      this.logger?.error("error", `チケット処理例外: ${err.message}`, { issueKey: issue.issueKey });
     }
   }
 

@@ -179,7 +179,45 @@ Backlog で課題を作成する際、「詳細」に対象リポジトリ（単
 > **⚡ クォータ消費を約 60% 削減**:
 > 5段階パイプラインに比べて呼び出し回数が 2回に激減し、LLM クォータ消費と待ち時間を大幅に圧縮できます。
 
-### 8. デーモンの起動方法（フォアグラウンド / バックグラウンド）
+### 8. 複数チケットの並行開発（Git Worktree & Concurrency 制御）
+
+`aidevflow` は `git worktree` を最大限に活かし、**複数の Backlog チケットを同時に並行開発**できます。
+
+```
+                   Backlog チケット検知
+                            │
+               ┌────────────┴────────────┐
+               ▼                         ▼
+          [STUDY-10]                [STUDY-11]
+               │                         │
+      Git Mutex (親Repo排他)     Git Mutex (親Repo排他)
+               │                         │
+   worktree: worktrees/STUDY-10    worktree: worktrees/STUDY-11
+   branch:   STUDY-10              branch:   STUDY-11
+               │                         │
+       ┌───────┴───────┐         ┌───────┴───────┐
+       ▼               ▼         ▼               ▼
+  [developer]   [code-reviewer] [architect]  [tech-lead]
+  (Agent #1)                     (Agent #2)
+       │                                 │
+       └──────────────┬──────────────────┘
+                      ▼
+     最大同時実行数制御 (MAX_CONCURRENCY = 2)
+```
+
+#### 💡 特徴と安全設計
+1. **完全分離された作業環境**:
+   - チケットごとに `~/aidevflow/worktrees/<issueKey>/<repoName>` とブランチ `<issueKey>` を自動生成するため、ファイル変更やコミット、テスト実行が衝突しません。
+2. **同時実行数（Concurrency）制御**:
+   - `.env` の `MAX_CONCURRENCY`（デフォルト: `2`）で最大並行タスク数を指定可能。マシンスペックや LLM クォータ（レートリミット）の許容量に合わせて安全に調整できます。
+3. **In-Flight チケット追跡による二重起動防止**:
+   - バックグラウンド実行中も Poller は定期巡回しますが、既に実行中のチケットは自動スキップされるため、同一チケットが重複起動される心配はありません。
+4. **Git 操作の非同期排他制御（Mutex）**:
+   - 親リポジトリ（`repos/<repoName>`）に対する `git clone / fetch / worktree add` などの親ディレクトリ操作時のみ、アプリケーション内部の非同期 Mutex で安全に順番待ち（直列化）し、Git の `.git/index.lock` 衝突エラーを防ぎます。
+5. **Graceful Shutdown**:
+   - デーモン停止シグナル（`Ctrl + C` や `pnpm run stop`）を受信した際、現在実行中のチケットタスクが安全に完了するまで待機してから終了します。
+
+### 9. デーモンの起動方法（フォアグラウンド / バックグラウンド）
 
 開発・デバッグ時の動作確認には **フォアグラウンド起動**、ターミナルを閉じて常駐稼働させるには **バックグラウンド起動** を使い分けることができます。
 
@@ -264,7 +302,7 @@ journalctl --user -u aidevflow -f
 >
 > 初回の環境構築時や Backlog プロジェクトの接続確認には、まずモック起動で動作をテストすることをおすすめします。
 
-### 9. テストの実行 (Vitest)
+### 10. テストの実行 (Vitest)
 
 Node.js LTS (v24) 組み込みの `process.loadEnvFile()` と **Vitest (v4.x)** により、軽量かつ高速にユニットテストを実行できます：
 

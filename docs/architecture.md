@@ -396,7 +396,52 @@ LLM（Claude や Gemini 等）の実際の呼び出しを行わず、各専門�
 
 ---
 
-## 12. 技術スタック & 設計思想
+## 12. 複数チケット並行開発アーキテクチャ（Git Worktree & Concurrency 制御）
+
+### 概要
+`aidevflow` は `git worktree` を最大限に活用し、**複数の Backlog チケットを同時に並行開発**できます。
+
+```
+                   Backlog チケット検知
+                            │
+               ┌────────────┴────────────┐
+               ▼                         ▼
+          [STUDY-10]                [STUDY-11]
+               │                         │
+      Git Mutex (親Repo排他)     Git Mutex (親Repo排他)
+               │                         │
+   worktree: worktrees/STUDY-10    worktree: worktrees/STUDY-11
+   branch:   STUDY-10              branch:   STUDY-11
+               │                         │
+       ┌───────┴───────┐         ┌───────┴───────┐
+       ▼               ▼         ▼               ▼
+  [developer]   [code-reviewer] [architect]  [tech-lead]
+  (Agent #1)                     (Agent #2)
+       │                                 │
+       └──────────────┬──────────────────┘
+                      ▼
+     最大同時実行数制御 (MAX_CONCURRENCY = 2)
+```
+
+### アーキテクチャ構成要素
+
+1. **ワーカープール / 同時実行数制御 (`MAX_CONCURRENCY`)**:
+   - デフォルト `MAX_CONCURRENCY=2`（環境変数または `.env` で設定可能）。
+   - エージェントプロセス（CLI）の過密起動によるマシン負荷や LLM クォータ（Rate Limit）の枯渇を防ぎつつ、スロット数に応じて最大 N 件のチケットを非同期並行実行します。
+2. **In-Flight チケット管理 (`inFlightIssues: Set<string>`)**:
+   - 現在実行中のチケットキーをメモリ上で追跡。
+   - バックグラウンドでエージェントが実行されている間、次回以降のポーリングサイクル（例: 10秒毎）でも同一チケットが多重ディスパッチされるのを完全に防ぎます。
+   - 処理完了時（成功、差し戻し、エスカレーション、エラー問わず）に `finally` で自動解放されます。
+3. **親 Git リポジトリ操作の非同期排他制御 (`KeyedAsyncMutex`)**:
+   - `worktree` ディレクトリ自体は `~/aidevflow/worktrees/<issueKey>/<repoName>` と完全に独立していますが、親リポジトリ（`~/aidevflow/repos/<repoName>`）に対する `git clone / fetch / worktree add` は `.git/` 配下のロックファイル（`.git/index.lock` 等）を共有します。
+   - 同一親リポジトリに対する準備操作時のみ、アプリケーション内部の非同期 Mutex（[`KeyedAsyncMutex`](file:///home/oharato/workspace/aidevflow/src/git/mutex.ts)）で順番待ち（直列化）を行います。
+   - worktree が作成された後は、エージェントは各チケット専用ディレクトリで**完全並行**にコード変更・テスト・コミットを実行できます。
+4. **Graceful Shutdown**:
+   - デーモン停止シグナル（SIGINT / SIGTERM）受信時、現在実行中のタスク（Promise）が安全に完了するまで待機（`waitForActiveTasks()`）してから終了します。
+
+---
+
+## 13. 技術スタック & 設計思想
 
 - **ランタイム**: Node.js LTS (v24.x)
   - 組み込みの `process.loadEnvFile()` を採用。外部 `dotenv` パッケージを排除し、本番依存ゼロ（`dependencies: {}`）を達成。

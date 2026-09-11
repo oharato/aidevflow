@@ -3,6 +3,7 @@ import { promisify } from "util";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { KeyedAsyncMutex } from "./mutex.js";
 
 const execAsync = promisify(exec);
 
@@ -22,6 +23,7 @@ export class GitWorktreeManager {
   private baseDir: string;
   private reposDir: string;
   private worktreesDir: string;
+  private repoMutex: KeyedAsyncMutex = new KeyedAsyncMutex();
 
   constructor(customBaseDir?: string) {
     // デフォルト: ~/aidevflow/ (起動ユーザーのホームディレクトリ配下)
@@ -55,13 +57,20 @@ export class GitWorktreeManager {
 
   /**
    * リポジトリを ~/aidevflow/repos/<repoName> に準備 (clone または fetch) する
+   * (非同期 Mutex により同一リポジトリへの同時操作を排他制御)
    */
   async ensureRepository(repoUrlOrPath: string): Promise<string> {
+    const repoName = this.extractRepoName(repoUrlOrPath);
+    return this.repoMutex.runExclusive(repoName, async () => {
+      return this.ensureRepositoryInternal(repoUrlOrPath, repoName);
+    });
+  }
+
+  private async ensureRepositoryInternal(repoUrlOrPath: string, repoName: string): Promise<string> {
     if (!fs.existsSync(this.reposDir)) {
       fs.mkdirSync(this.reposDir, { recursive: true });
     }
 
-    const repoName = this.extractRepoName(repoUrlOrPath);
     const targetRepoPath = path.join(this.reposDir, repoName);
 
     // すでに clone 済みの場合は状態確認と fetch
@@ -89,59 +98,63 @@ export class GitWorktreeManager {
    * 単一リポジトリの worktree を作成・準備する
    * 作成パス: ~/aidevflow/worktrees/<issueKey>/<repoName>/
    * ブランチ名: <issueKey>
+   * (非同期 Mutex により、同一親リポジトリへの同時 worktree 操作を安全に直列化)
    */
   async ensureWorktree(repoUrlOrPath: string, issueKey: string): Promise<string> {
-    const repoPath = await this.ensureRepository(repoUrlOrPath);
     const repoName = this.extractRepoName(repoUrlOrPath);
 
-    // 1チケットで複数リポジトリがあっても衝突しないよう ~/aidevflow/worktrees/<issueKey>/<repoName>/ に配置
-    const issueWorktreeBaseDir = path.join(this.worktreesDir, issueKey);
-    if (!fs.existsSync(issueWorktreeBaseDir)) {
-      fs.mkdirSync(issueWorktreeBaseDir, { recursive: true });
-    }
+    return this.repoMutex.runExclusive(repoName, async () => {
+      const repoPath = await this.ensureRepositoryInternal(repoUrlOrPath, repoName);
 
-    const worktreeDir = path.join(issueWorktreeBaseDir, repoName);
-    const branchName = issueKey;
-
-    // 既存の worktree 一覧を確認
-    const existingWorktrees = await this.listWorktrees(repoPath);
-    const existing = existingWorktrees.find(
-      (wt) => path.resolve(wt.worktreePath) === path.resolve(worktreeDir)
-    );
-
-    if (existing) {
-      console.log(`[GitWorktree] 既存の worktree を再利用します: ${worktreeDir} (ブランチ: ${existing.branch})`);
-      try {
-        await execAsync(`git pull origin "${existing.branch}"`, { cwd: worktreeDir });
-      } catch {
-        // リモート未プッシュ時やネットワークエラー時はスキップ
+      // 1チケットで複数リポジトリがあっても衝突しないよう ~/aidevflow/worktrees/<issueKey>/<repoName>/ に配置
+      const issueWorktreeBaseDir = path.join(this.worktreesDir, issueKey);
+      if (!fs.existsSync(issueWorktreeBaseDir)) {
+        fs.mkdirSync(issueWorktreeBaseDir, { recursive: true });
       }
+
+      const worktreeDir = path.join(issueWorktreeBaseDir, repoName);
+      const branchName = issueKey;
+
+      // 既存の worktree 一覧を確認
+      const existingWorktrees = await this.listWorktrees(repoPath);
+      const existing = existingWorktrees.find(
+        (wt) => path.resolve(wt.worktreePath) === path.resolve(worktreeDir)
+      );
+
+      if (existing) {
+        console.log(`[GitWorktree] 既存の worktree を再利用します: ${worktreeDir} (ブランチ: ${existing.branch})`);
+        try {
+          await execAsync(`git pull origin "${existing.branch}"`, { cwd: worktreeDir });
+        } catch {
+          // リモート未プッシュ時やネットワークエラー時はスキップ
+        }
+        return worktreeDir;
+      }
+
+      // ゴーストディレクトリの整理
+      await execAsync("git worktree prune", { cwd: repoPath }).catch(() => {});
+
+      if (fs.existsSync(worktreeDir)) {
+        fs.rmSync(worktreeDir, { recursive: true, force: true });
+      }
+
+      const branchExists = await this.checkBranchExists(repoPath, branchName);
+
+      console.log(`[GitWorktree] 新規 worktree を作成中: パス=${worktreeDir}, ブランチ=${branchName} (新規ブランチ: ${!branchExists})`);
+
+      if (branchExists) {
+        await execAsync(`git worktree add "${worktreeDir}" "${branchName}"`, {
+          cwd: repoPath,
+        });
+      } else {
+        await execAsync(`git worktree add -b "${branchName}" "${worktreeDir}"`, {
+          cwd: repoPath,
+        });
+      }
+
+      console.log(`[GitWorktree] worktree 作成成功: ${worktreeDir}`);
       return worktreeDir;
-    }
-
-    // ゴーストディレクトリの整理
-    await execAsync("git worktree prune", { cwd: repoPath }).catch(() => {});
-
-    if (fs.existsSync(worktreeDir)) {
-      fs.rmSync(worktreeDir, { recursive: true, force: true });
-    }
-
-    const branchExists = await this.checkBranchExists(repoPath, branchName);
-
-    console.log(`[GitWorktree] 新規 worktree を作成中: パス=${worktreeDir}, ブランチ=${branchName} (新規ブランチ: ${!branchExists})`);
-
-    if (branchExists) {
-      await execAsync(`git worktree add "${worktreeDir}" "${branchName}"`, {
-        cwd: repoPath,
-      });
-    } else {
-      await execAsync(`git worktree add -b "${branchName}" "${worktreeDir}"`, {
-        cwd: repoPath,
-      });
-    }
-
-    console.log(`[GitWorktree] worktree 作成成功: ${worktreeDir}`);
-    return worktreeDir;
+    });
   }
 
   /**
