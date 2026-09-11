@@ -4,6 +4,7 @@ import type { BacklogStatus, BacklogIssue } from "../backlog/types.js";
 import type { JsonlLogger } from "../logger/jsonl.js";
 import { QuotaLockManager, type QuotaLockMetadata } from "./quota-lock.js";
 import type { QuotaProbeResult, AgentRole } from "../agents/types.js";
+import { TokenUsageTracker } from "../agents/runner.js";
 import { PHASE_TAGS, formatSummaryWithPhase } from "../backlog/prefix-helper.js";
 
 export interface PollerFilterOptions {
@@ -336,14 +337,19 @@ export class BacklogPoller {
     // ログ抑制: 30秒に1回だけ出力
     if (now - this.lastQuotaLogAt >= 30000) {
       this.lastQuotaLogAt = now;
+      const totals = TokenUsageTracker.getTotals();
+      const usageInfo =
+        totals.totalTokens > 0
+          ? ` [累計消費: ${totals.totalTokens.toLocaleString()} tokens (${totals.sessionCount}回)]`
+          : "";
       if (remainingMs !== null && remainingMs > 0) {
         const remainingMinutes = Math.ceil(remainingMs / 60000);
         console.log(
-          `[Poller] ⏳ クォータ回復待機中 (リセット予定: ${metadata.resetsAt} / 残り 約${remainingMinutes}分)。Backlog ポーリング休止中... (ロック: ${this.quotaLockManager.getLockFilePath()})`
+          `[Poller] ⏳ クォータ回復待機中 (リセット予定: ${metadata.resetsAt} / 残り 約${remainingMinutes}分)${usageInfo}。Backlog ポーリング休止中... (ロック: ${this.quotaLockManager.getLockFilePath()})`
         );
       } else {
         console.log(
-          `[Poller] ⏳ クォータ回復待機中 (定期プローブ中)。Backlog ポーリング休止中... (ロック: ${this.quotaLockManager.getLockFilePath()})`
+          `[Poller] ⏳ クォータ回復待機中 (定期プローブ中)${usageInfo}。Backlog ポーリング休止中... (ロック: ${this.quotaLockManager.getLockFilePath()})`
         );
       }
     }

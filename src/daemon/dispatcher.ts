@@ -7,6 +7,7 @@ const execAsync = promisify(exec);
 import type { BacklogClient } from "../backlog/client.js";
 import type { BacklogIssue, BacklogStatus } from "../backlog/types.js";
 import type { IAgentRunner, AgentRole, AgentContext } from "../agents/types.js";
+import { TokenUsageTracker } from "../agents/runner.js";
 import type { JsonlLogger } from "../logger/jsonl.js";
 import { extractRepositoryPaths } from "../git/repo-parser.js";
 import { GitWorktreeManager, type WorktreeTarget } from "../git/worktree.js";
@@ -261,8 +262,8 @@ export class AgentDispatcher {
     issueKey: string
   ): string[] {
     const lines: string[] = [
-      `#### 🚀 手元での動作確認（ローカル検証）手順:`,
-      `レビュー時に手元でアプリやテストを動かして確認する場合の手順です：`,
+      `#### 🚀 手元での動作確認（ローカル検証）手順 & 要件受入コマンド:`,
+      `本チケットの要件が正しく満たされているか、手元で確認・受入検証を行うための具体的な手順とコマンドです：`,
       ``,
     ];
 
@@ -274,6 +275,18 @@ export class AgentDispatcher {
       lines.push(`   cd ${dir}`);
       lines.push(`   git pull origin "${issueKey}"`);
       lines.push(`   \`\`\``);
+      lines.push(``);
+
+      lines.push(`2. **コミット履歴 & 実装差分の確認 (要件との照合)**:`);
+      lines.push(`   \`\`\`bash`);
+      lines.push(`   # 直近のコミット一覧（要件に沿った実装内容）の確認`);
+      lines.push(`   git log -n 5 --oneline`);
+      lines.push(`   # 変更ファイルと差分統計の確認`);
+      lines.push(`   git diff origin/main..HEAD --stat`);
+      lines.push(`   # 必要に応じて詳細差分を確認`);
+      lines.push(`   git diff origin/main..HEAD`);
+      lines.push(`   \`\`\``);
+      lines.push(``);
 
       // プロジェクト構成の検知
       const hasDockerCompose =
@@ -287,51 +300,82 @@ export class AgentDispatcher {
       const hasBackendRequirements = fs.existsSync(path.join(dir, "backend", "requirements.txt"));
       const hasRootRequirements = fs.existsSync(path.join(dir, "requirements.txt"));
 
-      if (hasDockerCompose) {
-        lines.push(`2. **コンテナの一括起動 (Docker Compose)**:`);
-        lines.push(`   \`\`\`bash`);
-        lines.push(`   docker compose up -d --build`);
-        lines.push(`   \`\`\``);
-        lines.push(`   - 停止時: \`docker compose down\``);
-      } else if (hasPackageJson) {
-        lines.push(`2. **依存関係のインストール & 開発サーバー起動**:`);
-        lines.push(`   \`\`\`bash`);
-        lines.push(`   pnpm install && pnpm dev`);
-        lines.push(`   \`\`\``);
-        lines.push(`   - テスト実行: \`pnpm test\``);
+      lines.push(`3. **自動テスト & ビルドによる品質検証**:`);
+      lines.push(`   \`\`\`bash`);
+      if (hasPackageJson) {
+        lines.push(`   # 依存関係のインストール`);
+        lines.push(`   pnpm install`);
+        lines.push(`   # 単体テスト・結合テストの実行`);
+        lines.push(`   pnpm test`);
+        lines.push(`   # 型チェック & ビルド検証`);
+        lines.push(`   pnpm run build`);
       } else if (hasRootRequirements) {
-        lines.push(`2. **Python アプリの起動**:`);
-        lines.push(`   \`\`\`bash`);
-        lines.push(`   python3 -m venv .venv && source .venv/bin/activate`);
-        lines.push(`   pip install -r requirements.txt`);
-        lines.push(`   \`\`\``);
+        lines.push(`   pytest`);
+      } else {
+        lines.push(`   # プロジェクト規定のテストを実行`);
+        lines.push(`   make test`);
       }
+      lines.push(`   \`\`\``);
+      lines.push(``);
 
+      lines.push(`4. **ローカル起動 & 動作確認 (要件受入チェック)**:`);
+      lines.push(`   \`\`\`bash`);
+      if (hasDockerCompose) {
+        lines.push(`   # コンテナ一括起動`);
+        lines.push(`   docker compose up -d --build`);
+        lines.push(`   # ログ確認`);
+        lines.push(`   docker compose logs -f`);
+      } else if (hasPackageJson) {
+        lines.push(`   pnpm dev`);
+      } else if (hasRootRequirements) {
+        lines.push(`   source .venv/bin/activate && python main.py`);
+      }
+      lines.push(`   \`\`\``);
+
+      if (hasDockerCompose) {
+        lines.push(`   - 停止時: \`docker compose down\``);
+      }
       if (hasFrontendPackageJson && !hasDockerCompose) {
-        lines.push(`- **フロントエンド起動**: \`cd frontend && pnpm install && pnpm dev\``);
+        lines.push(`   - **フロントエンド起動**: \`cd frontend && pnpm dev\``);
       }
       if (hasBackendRequirements && !hasDockerCompose) {
-        lines.push(`- **バックエンド起動**: \`cd backend && pip install -r requirements.txt\``);
+        lines.push(`   - **バックエンド起動**: \`cd backend && pip install -r requirements.txt && python app.py\``);
       }
+      lines.push(`   - **受入確認ポイント**: チケットに記載された要件（新機能、UI表示、APIレスポンス等）が仕様通り動作することをご確認ください。`);
       if (fs.existsSync(path.join(dir, "README.md"))) {
-        lines.push(`- 💡 *ポート番号やAPIエンドポイント等の詳細はリポジトリ内の \`README.md\` をご参照ください。*`);
+        lines.push(`   - 💡 *ポート番号やAPIエンドポイント等の詳細はリポジトリ内の \`README.md\` もご参照ください。*`);
       }
     } else if (worktreeTargets.length > 1) {
       lines.push(`1. **各リポジトリのワークツリーへ移動 & 最新コードの同期**:`);
       for (const target of worktreeTargets) {
         lines.push(`   - **${target.repoName}**:`);
         lines.push(`     \`\`\`bash`);
-        lines.push(`     cd ${target.worktreeDir} && git pull origin "${issueKey}"`);
+        lines.push(`     cd ${target.worktreeDir}`);
+        lines.push(`     git pull origin "${issueKey}"`);
+        lines.push(`     git log -n 3 --oneline`);
+        lines.push(`     git diff origin/main..HEAD --stat`);
         lines.push(`     \`\`\``);
       }
-      lines.push(`2. **それぞれのサービスの起動手順に従って動作をご確認ください。**`);
+      lines.push(`2. **各サービスのテスト・ビルド・起動コマンドを実行し、サービス間連携および要件の動作をご確認ください。**`);
     } else {
       lines.push(`1. **作業ディレクトリへ移動 & 最新コードの同期**:`);
       lines.push(`   \`\`\`bash`);
       lines.push(`   cd ${executionWorkDir}`);
       lines.push(`   git pull origin "${issueKey}"`);
+      lines.push(`   git log -n 5 --oneline`);
+      lines.push(`   git diff origin/main..HEAD --stat`);
       lines.push(`   \`\`\``);
+      lines.push(`2. **テストを実行して要件の動作をご確認ください。**`);
     }
+
+    lines.push(``);
+    lines.push(`5. **確認後の対応アクション**:`);
+    lines.push(`   - **【要件通りで問題ない場合 (完了・マージ)】**:`);
+    lines.push(`     1. GitHub 上でプルリクエストをマージしてください。`);
+    lines.push(`     2. 本チケットのステータスを **「完了」** に変更してください。`);
+    lines.push(`   - **【修正や追加要望がある場合 (AIに再修正させる)】**:`);
+    lines.push(`     1. 本チケットのコメント欄に具体的な修正指示・指摘を記入してください。`);
+    lines.push(`     2. ステータスを **「処理中」** に変更してください（AI エージェントが自動で修正コミットを作成して PR に push します）。`);
 
     return lines;
   }
@@ -442,15 +486,20 @@ export class AgentDispatcher {
     const result = await this.runner.run(role, context);
     const durationMs = Date.now() - startTime;
 
+    const cumulativeTotals = TokenUsageTracker.getTotals();
     this.logger?.info("agent_finish", `エージェント [${role}] 実行完了 (${durationMs}ms)`, {
       issueKey: issue.issueKey,
       role,
       durationMs,
+      usage: result.usage ? (result.usage as any) : undefined,
+      cumulativeTokens: cumulativeTotals as any,
       data: {
         success: result.success,
         isRejection: result.isRejection,
         summary: result.summary,
         executionWorkDir,
+        usage: result.usage,
+        cumulativeTokens: cumulativeTotals,
       },
     });
 
@@ -755,6 +804,16 @@ export class AgentDispatcher {
           `- **作業 Worktree**: \`${executionWorkDir}\``,
           `- **ステータス**: ${nextStatusTarget}`,
           ...(newSummary ? [`- **新件名**: \`${newSummary}\``] : []),
+          ...(result.usage?.totalTokens
+            ? [
+                `- **最終フェーズ消費トークン**: 入力: ${result.usage.inputTokens?.toLocaleString()} / 出力: ${result.usage.outputTokens?.toLocaleString()} (思考: ${result.usage.thinkingTokens?.toLocaleString() || 0}) / 合計: ${result.usage.totalTokens?.toLocaleString()} tokens`,
+              ]
+            : []),
+          ...(TokenUsageTracker.getTotals().totalTokens > 0
+            ? [
+                `- **累計トークン消費 (全セッション計)**: ${TokenUsageTracker.getTotals().totalTokens.toLocaleString()} tokens (${TokenUsageTracker.getTotals().sessionCount}回実行)`,
+              ]
+            : []),
           ``,
           reviewReportTitle,
           result.output,
@@ -763,15 +822,15 @@ export class AgentDispatcher {
           ...verificationGuide,
           ``,
           `---`,
-          `#### [手順] 人間レビュー後の対応手順:`,
-          `- **【修正が必要な場合 (AIに再修正させる)】**:`,
+          `#### 👤 人間レビュー後の対応手順:`,
+          `- **【要件を満たしており問題ない場合 (完了・マージ)】**:`,
+          `  1. GitHub 上でプルリクエストをマージしてください。`,
+          `  2. 本チケットのステータスを **「完了」** に変更してください。`,
+          `- **【修正や追加要望がある場合 (AIに再修正させる)】**:`,
           `  1. 本チケットのコメント欄に修正指示・指摘を記入してください（PRへのコメント参照でも可）。`,
           `  2. ステータスを **「処理中」** に変更してください。`,
           `     - デーモンがコメントを検知し、自動的に \`developer\`（実装）が修正コミットを作成して PR に追記 push します。`,
-          `     - （※設計からの抜本的な見直しを行いたい場合は、件名を \`[詳細設計中]\` に変更してください）`,
-          `- **【問題なく完了・マージする場合】**:`,
-          `  1. GitHub 上でプルリクエストをマージしてください。`,
-          `  2. 本チケットのステータスを **「完了」** に変更してください。`
+          `     - （※設計からの抜本的な見直しを行いたい場合は、件名を \`[詳細設計中]\` に変更してください）`
         );
       }
     } else {
@@ -788,12 +847,17 @@ export class AgentDispatcher {
         ? (result.isRejection ? "差し戻し" : "成功 ([承認])")
         : "失敗 ([エラー])";
 
+      const usageDetail = result.usage?.totalTokens
+        ? `**トークン消費量**: 入力: ${result.usage.inputTokens?.toLocaleString()} / 出力: ${result.usage.outputTokens?.toLocaleString()} (思考: ${result.usage.thinkingTokens?.toLocaleString() || 0}) / 合計: ${result.usage.totalTokens?.toLocaleString()} tokens`
+        : undefined;
+
       commentLines.push(
         `### [AI] aidevflow [${role}] 処理報告`,
         `**結果**: ${resultLabel}`,
         `**ブランチ**: \`${issue.issueKey}\``,
         ...prSectionLines,
         `**所要時間**: ${(durationMs / 1000).toFixed(1)}s`,
+        ...(usageDetail ? [usageDetail] : []),
         `**次の想定フェーズ**: ${nextStatusTarget}`,
         ...(newSummary ? [`- **新件名**: \`${newSummary}\``] : []),
         ``,

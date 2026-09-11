@@ -1,7 +1,63 @@
 import { spawn } from "child_process";
-import type { AgentRole, AgentContext, AgentResult, IAgentRunner, QuotaProbeResult } from "./types.js";
+import type {
+  AgentRole,
+  AgentContext,
+  AgentResult,
+  IAgentRunner,
+  QuotaProbeResult,
+  AgentTokenUsage,
+  CumulativeTokenStats,
+} from "./types.js";
 import { buildAgentPrompt } from "./prompts.js";
 import { parseResetDuration } from "../daemon/quota-lock.js";
+
+/**
+ * プロセス全体でのトークン使用量をスレッドセーフに集計・追跡するトラッカー
+ */
+export class TokenUsageTracker {
+  private static totalInputTokens = 0;
+  private static totalOutputTokens = 0;
+  private static totalThinkingTokens = 0;
+  private static totalCacheReadTokens = 0;
+  private static totalTokens = 0;
+  private static sessionCount = 0;
+
+  static record(usage?: AgentTokenUsage): CumulativeTokenStats {
+    if (usage) {
+      this.sessionCount++;
+      this.totalInputTokens += usage.inputTokens || 0;
+      this.totalOutputTokens += usage.outputTokens || 0;
+      this.totalThinkingTokens += usage.thinkingTokens || 0;
+      this.totalCacheReadTokens += usage.cacheReadTokens || 0;
+      this.totalTokens += usage.totalTokens || 0;
+    }
+    return this.getTotals();
+  }
+
+  static getTotals(): CumulativeTokenStats {
+    return {
+      sessionCount: this.sessionCount,
+      totalInputTokens: this.totalInputTokens,
+      totalOutputTokens: this.totalOutputTokens,
+      totalThinkingTokens: this.totalThinkingTokens,
+      totalCacheReadTokens: this.totalCacheReadTokens,
+      totalTokens: this.totalTokens,
+    };
+  }
+
+  static getSummary(): string {
+    return `[トークン累積消費] セッション数: ${this.sessionCount}回 | 入力: ${this.totalInputTokens.toLocaleString()} | 出力: ${this.totalOutputTokens.toLocaleString()} (思考: ${this.totalThinkingTokens.toLocaleString()}) | キャッシュ読込: ${this.totalCacheReadTokens.toLocaleString()} | 合計: ${this.totalTokens.toLocaleString()} tokens`;
+  }
+
+  static reset(): void {
+    this.totalInputTokens = 0;
+    this.totalOutputTokens = 0;
+    this.totalThinkingTokens = 0;
+    this.totalCacheReadTokens = 0;
+    this.totalTokens = 0;
+    this.sessionCount = 0;
+  }
+}
 
 /**
  * 出力テキストから差し戻し（Rejection）判定を行う。
@@ -114,6 +170,7 @@ export class AgyRunner implements IAgentRunner {
       let finalResponse = "";
       let lineBuffer = "";
       let lastToolCall = "";
+      let parsedUsage: AgentTokenUsage | undefined;
 
       child.stdout.on("data", (data) => {
         const text = data.toString();
@@ -144,6 +201,16 @@ export class AgyRunner implements IAgentRunner {
               if (parsed.result?.response) {
                 finalResponse = parsed.result.response;
               }
+              if (parsed.result?.usage) {
+                const u = parsed.result.usage;
+                parsedUsage = {
+                  inputTokens: u.input_tokens,
+                  outputTokens: u.output_tokens,
+                  thinkingTokens: u.thinking_tokens,
+                  cacheReadTokens: u.cache_read_tokens,
+                  totalTokens: u.total_tokens,
+                };
+              }
             }
           } catch {
             // JSONでない平文の場合のみ蓄積・出力
@@ -166,6 +233,14 @@ export class AgyRunner implements IAgentRunner {
         process.off("exit", cleanupChild);
         const totalDurationSec = Math.round((Date.now() - startTime) / 1000);
         console.log(`\n[AgyRunner] ${role} エージェント終了 (終了コード: ${code}, 所要時間: ${totalDurationSec}秒)`);
+
+        if (parsedUsage) {
+          TokenUsageTracker.record(parsedUsage);
+          console.log(
+            `[AgyRunner] 📊 [${role}] トークン消費: 入力=${parsedUsage.inputTokens?.toLocaleString()} / 出力=${parsedUsage.outputTokens?.toLocaleString()} (思考=${parsedUsage.thinkingTokens?.toLocaleString() || 0}) / キャッシュ=${parsedUsage.cacheReadTokens?.toLocaleString() || 0} / 合計=${parsedUsage.totalTokens?.toLocaleString()} tokens`
+          );
+          console.log(`[AgyRunner] 📈 ${TokenUsageTracker.getSummary()}`);
+        }
 
         // 生の NDJSON (rawStdout) は絶対に含めず、エージェントが発言したテキストのみを取り出す
         let outputText = (finalResponse || accumulatedText).trim();
@@ -191,6 +266,8 @@ export class AgyRunner implements IAgentRunner {
           summary: `エージェント [${role}] が実行されました (終了コード: ${code})`,
           isRejection,
           output: outputText,
+          usage: parsedUsage,
+          durationSeconds: totalDurationSec,
         });
       });
 

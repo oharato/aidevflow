@@ -26,6 +26,17 @@ export interface LogEvent {
   issueKey?: string;
   role?: string;
   durationMs?: number;
+  usage?: Record<string, unknown>;
+  cumulativeTokens?: Record<string, unknown>;
+  data?: Record<string, unknown>;
+}
+
+export interface LogMeta {
+  issueKey?: string;
+  role?: string;
+  durationMs?: number;
+  usage?: Record<string, unknown>;
+  cumulativeTokens?: Record<string, unknown>;
   data?: Record<string, unknown>;
 }
 
@@ -44,12 +55,7 @@ export class JsonlLogger {
     level: LogLevel,
     event: EventType,
     message: string,
-    meta?: {
-      issueKey?: string;
-      role?: string;
-      durationMs?: number;
-      data?: Record<string, unknown>;
-    }
+    meta?: LogMeta
   ): void {
     const entry: LogEvent = {
       timestamp: new Date().toISOString(),
@@ -59,6 +65,8 @@ export class JsonlLogger {
       issueKey: meta?.issueKey,
       role: meta?.role,
       durationMs: meta?.durationMs,
+      usage: meta?.usage,
+      cumulativeTokens: meta?.cumulativeTokens,
       data: meta?.data,
     };
 
@@ -73,7 +81,7 @@ export class JsonlLogger {
   info(
     event: EventType,
     message: string,
-    meta?: { issueKey?: string; role?: string; durationMs?: number; data?: Record<string, unknown> }
+    meta?: LogMeta
   ): void {
     this.log("info", event, message, meta);
   }
@@ -81,7 +89,7 @@ export class JsonlLogger {
   warn(
     event: EventType,
     message: string,
-    meta?: { issueKey?: string; role?: string; durationMs?: number; data?: Record<string, unknown> }
+    meta?: LogMeta
   ): void {
     this.log("warn", event, message, meta);
   }
@@ -89,7 +97,7 @@ export class JsonlLogger {
   error(
     event: EventType,
     message: string,
-    meta?: { issueKey?: string; role?: string; durationMs?: number; data?: Record<string, unknown> }
+    meta?: LogMeta
   ): void {
     this.log("error", event, message, meta);
   }

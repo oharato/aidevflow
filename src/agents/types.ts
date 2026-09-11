@@ -10,6 +10,23 @@ export interface AgentContext {
   isFastMode?: boolean;
 }
 
+export interface AgentTokenUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  thinkingTokens?: number;
+  cacheReadTokens?: number;
+  totalTokens?: number;
+}
+
+export interface CumulativeTokenStats {
+  sessionCount: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalThinkingTokens: number;
+  totalCacheReadTokens: number;
+  totalTokens: number;
+}
+
 export interface AgentResult {
   role: AgentRole;
   success: boolean;
@@ -17,6 +34,8 @@ export interface AgentResult {
   nextStatusName?: string;
   isRejection?: boolean;
   output: string;
+  usage?: AgentTokenUsage;
+  durationSeconds?: number;
 }
 
 export interface QuotaProbeResult {
