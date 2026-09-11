@@ -19,7 +19,7 @@ describe("AgentDispatcher (複数リポジトリ・PR連携含む)", () => {
     expect(dispatcher.resolveRoleFromStatus("詳細設計中")).toBe("architect");
     expect(dispatcher.resolveRoleFromStatus("設計レビュー中")).toBe("tech-lead");
     expect(dispatcher.resolveRoleFromStatus("技術レビュー中")).toBe("code-reviewer");
-    expect(dispatcher.resolveRoleFromStatus("要件レビュー中")).toBe("qa");
+    expect(dispatcher.resolveRoleFromStatus("要件レビュー中")).toBe("requirement-reviewer");
     expect(dispatcher.resolveRoleFromStatus("不明な状態")).toBeNull();
   });
 

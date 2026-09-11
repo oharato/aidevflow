@@ -184,9 +184,9 @@ export class AgentDispatcher {
       return "code-reviewer";
     }
 
-    // 5. 要件的観点レビュー (qa)
-    if (s.includes("要件レビュー") || s.includes("qa") || s.includes("editor")) {
-      return "qa";
+    // 5. 要件的観点レビュー (requirement-reviewer)
+    if (s.includes("要件レビュー") || s.includes("requirement-reviewer") || s.includes("qa") || s.includes("editor")) {
+      return "requirement-reviewer";
     }
 
     return null;
@@ -203,7 +203,7 @@ export class AgentDispatcher {
         case "tech-lead":
           return "詳細設計";
         case "code-reviewer":
-        case "qa":
+        case "requirement-reviewer":
           return "実装";
         default:
           return "未対応";
@@ -219,7 +219,7 @@ export class AgentDispatcher {
         return "技術レビュー";
       case "code-reviewer":
         return isFastMode ? "完了" : "要件レビュー";
-      case "qa":
+      case "requirement-reviewer":
         return "完了";
     }
   }
@@ -456,13 +456,13 @@ export class AgentDispatcher {
       }
     }
 
-    // 5. GitHub PR の一括作成 / 取得 (Developer 実装完了時、最終 QA フェーズ、Fast モード Code-Reviewer、または調査タスクのフェーズ)
+    // 5. GitHub PR の一括作成 / 取得 (Developer 実装完了時、最終 Requirement-Reviewer フェーズ、Fast モード Code-Reviewer、または調査タスクのフェーズ)
     let prResults: PullRequestResult[] = [];
     const shouldEnsurePr =
       result.success &&
       !result.isRejection &&
       (role === "developer" ||
-        role === "qa" ||
+        role === "requirement-reviewer" ||
         (isFastMode && role === "code-reviewer") ||
         (isInvestigation && (role === "architect" || role === "tech-lead")));
 
@@ -534,7 +534,7 @@ export class AgentDispatcher {
       result.success &&
       !result.isRejection &&
       !isEscalation &&
-      (isInvestigation ? role === "tech-lead" : (isFastMode ? role === "code-reviewer" : role === "qa"));
+      (isInvestigation ? role === "tech-lead" : (isFastMode ? role === "code-reviewer" : role === "requirement-reviewer"));
     const isCustom = this.isCustomStatusMode(projectStatuses);
 
     if (isCustom) {
@@ -595,7 +595,7 @@ export class AgentDispatcher {
         resumeRole =
           role === "tech-lead"
             ? "architect"
-            : role === "code-reviewer" || role === "qa"
+            : role === "code-reviewer" || role === "requirement-reviewer"
             ? "developer"
             : role;
       } else {

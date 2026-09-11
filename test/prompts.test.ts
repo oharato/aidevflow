@@ -22,14 +22,14 @@ describe("エージェントプロンプト生成 (buildAgentPrompt)", () => {
     expect(prompt).toContain("7日以上のクールダウン");
   });
 
-  it("Code-Reviewer / QA / Developer のプロンプトにGitコンフリクト点検観点が含まれていること", () => {
+  it("Code-Reviewer / Requirement-Reviewer / Developer のプロンプトにGitコンフリクト点検観点が含まれていること", () => {
     const reviewerPrompt = buildAgentPrompt("code-reviewer", dummyContext);
     expect(reviewerPrompt).toContain("ベースブランチとのコンフリクト有無");
     expect(reviewerPrompt).toContain("Gitコンフリクトの有無、およびコード内にコンフリクトマーカー");
     expect(reviewerPrompt).toContain("Gitコンフリクト");
 
-    const qaPrompt = buildAgentPrompt("qa", dummyContext);
-    expect(qaPrompt).toContain("ベースブランチとの競合やコンフリクトマーカーの残留など、成果物のマージを阻害する不整合がないか確認する");
+    const reqReviewerPrompt = buildAgentPrompt("requirement-reviewer", dummyContext);
+    expect(reqReviewerPrompt).toContain("ベースブランチとの競合やコンフリクトマーカーの残留など、成果物のマージを阻害する不整合がないか確認する");
 
     const developerPrompt = buildAgentPrompt("developer", dummyContext);
     expect(developerPrompt).toContain("ベースブランチ（main/master等）とのGitコンフリクトが発生していないこと、およびソースコード内にコンフリクトマーカー");
@@ -43,15 +43,15 @@ describe("エージェントプロンプト生成 (buildAgentPrompt)", () => {
     expect(prompt).toContain("具体的なバージョン番号で明示・固定");
   });
 
-  it("Architect / Tech-Lead / QA のプロンプトも正常に生成されること", () => {
+  it("Architect / Tech-Lead / Requirement-Reviewer のプロンプトも正常に生成されること", () => {
     const architectPrompt = buildAgentPrompt("architect", dummyContext);
     expect(architectPrompt).toContain("あなたは【architect（詳細設計エージェント）】です。");
 
     const techLeadPrompt = buildAgentPrompt("tech-lead", dummyContext);
     expect(techLeadPrompt).toContain("あなたは【tech-lead（詳細設計レビューエージェント）】です。");
 
-    const qaPrompt = buildAgentPrompt("qa", dummyContext);
-    expect(qaPrompt).toContain("あなたは【qa（要件的観点レビューエージェント）】です。");
+    const reqReviewerPrompt = buildAgentPrompt("requirement-reviewer", dummyContext);
+    expect(reqReviewerPrompt).toContain("あなたは【requirement-reviewer（要件的観点レビューエージェント）】です。");
   });
 
   it("Fastモード時のCode-Reviewerプロンプトに統合レビュー（技術観点＋要件充足度＋コンフリクト点検）の指示が含まれること", () => {

@@ -241,8 +241,8 @@ describe("Backlogフリープラン（標準4状態のみ）件名プレフィ�
     expect(lastUpdatedParams.summary).toBe("[技術レビュー中] 決済APIリファクタリング");
   });
 
-  it("QA承認時に[要件レビュー完了]かつステータスが処理済み(3)に更新されること", async () => {
-    const qaIssue: BacklogIssue = {
+  it("Requirement-Reviewer承認時に[要件レビュー完了]かつステータスが処理済み(3)に更新されること", async () => {
+    const reqReviewerIssue: BacklogIssue = {
       ...baseIssue,
       summary: "[要件レビュー中] 決済APIリファクタリング",
       status: standardStatuses[1], // 処理中
@@ -256,7 +256,7 @@ describe("Backlogフリープラン（標準4状態のみ）件名プレフィ�
     }));
 
     const dispatcher = new AgentDispatcher(mockBacklog, runner, "/mock/payment-service", false, logger, mockWorktreeManager, mockGitHubService, 3);
-    const res = await dispatcher.processIssue(qaIssue, standardStatuses);
+    const res = await dispatcher.processIssue(reqReviewerIssue, standardStatuses);
 
     expect(res.newSummary).toBe("[要件レビュー完了] 決済APIリファクタリング");
     expect(lastUpdatedParams.summary).toBe("[要件レビュー完了] 決済APIリファクタリング");

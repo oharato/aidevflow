@@ -65,7 +65,7 @@ pnpm run setup:statuses
 - **設計レビュー中** (`#868cb7` 青紫) - Tech-Lead 担当
 - **実装中** (`#eda62a` オレンジ) - Developer 担当
 - **技術レビュー中** (`#b0be3c` 黄緑) - Code-Reviewer 担当
-- **要件レビュー中** (`#e07b9a` ピンク) - QA 担当
+- **要件レビュー中** (`#e07b9a` ピンク) - Requirement-Reviewer 担当
 - **確認待ち** (`#f42858` 赤) - 人間介入待ち
 
 > [!NOTE]

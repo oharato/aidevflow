@@ -9,7 +9,7 @@
 
 1. **重量級モデル（Pro）の無指定デフォルト起動**: CLI (`agy`) 呼び出し時にモデルが明示されておらず、高コスト・低クォータ枠のモデルが全工程で使用されていた。
 2. **推論エフォート（Effort）の過剰**: レビューや確認フェーズも含めて `medium` で実行され、思考トークン（Thinking tokens）が大量に消費されていた。
-3. **調査タスク判定の書式制約によるフェーズ増大**: 本文の `種別\n調査`（改行区切り）がコロン必須の正規表現に合致せず、本来2フェーズ（architect → tech-lead）で完了するタスクが5フェーズ（developer → code-reviewer → qa まで）すべて実行されていた。
+3. **調査タスク判定の書式制約によるフェーズ増大**: 本文の `種別\n調査`（改行区切り）がコロン必須の正規表現に合致せず、本来2フェーズ（architect → tech-lead）で完了するタスクが5フェーズ（developer → code-reviewer → requirement-reviewer まで）すべて実行されていた。
 4. **コメント履歴の肥大化**: プロンプト注入時に、過去の AI 自身による長大な処理報告（markdown 表やコード等）がそのまま蓄積され、プロンプトの入力トークンを圧迫していた。
 5. **固定5段階パイプライン**: 軽微な改修や単一ファイル修正であっても、常に5つのエージェントが順次実行されていた。
 
@@ -41,7 +41,7 @@ flowchart TD
     F1 --> F2["2. tech-lead (設計レビュー)\n[gemini-3.8-flash-medium]"]
     F2 --> F3["3. developer (実装 & テスト)\n[gemini-3.8-flash-high]"]
     F3 --> F4["4. code-reviewer (技術レビュー)\n[gemini-3.8-flash-medium]"]
-    F4 --> F5["5. qa (要件レビュー)\n[gemini-3.8-flash-medium]"]
+    F4 --> F5["5. requirement-reviewer (要件レビュー)\n[gemini-3.8-flash-medium]"]
     F5 --> FullDone["要件レビュー完了 (ステータス: 処理済み)"]
 ```
 

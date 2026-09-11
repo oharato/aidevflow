@@ -158,7 +158,7 @@ describe("Fastモード（軽量パイプライン: 実装 -> 統合レビュー
       expect(lastPostedComment).toContain("https://github.com/my-org/auth-service/pull/99");
     });
 
-    it("FastモードのCode-Reviewer承認により要件レビュー(qa)をスキップして直接全工程完了・処理済みに遷移すること", async () => {
+    it("FastモードのCode-Reviewer承認により要件レビュー(requirement-reviewer)をスキップして直接全工程完了・処理済みに遷移すること", async () => {
       const runner = new MockCustomRunner(() => ({
         role: "code-reviewer",
         success: true,
@@ -185,7 +185,7 @@ describe("Fastモード（軽量パイプライン: 実装 -> 統合レビュー
 
       const res = await dispatcher.processIssue(reviewIssue, standardStatuses);
 
-      // qa をスキップして直接 [要件レビュー完了] & ステータス 処理済み(3)
+      // requirement-reviewer をスキップして直接 [要件レビュー完了] & ステータス 処理済み(3)
       expect(res.newSummary).toBe("[要件レビュー完了] [fast] エラーメッセージの修正");
       expect(lastUpdatedParams.statusId).toBe(3); // 処理済み
       expect(lastPostedComment).toContain("【レビュー依頼】AIエージェントによる全工程が完了しました");

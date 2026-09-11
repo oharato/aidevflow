@@ -1,4 +1,4 @@
-export type AgentRole = "architect" | "tech-lead" | "developer" | "code-reviewer" | "qa";
+export type AgentRole = "architect" | "tech-lead" | "developer" | "code-reviewer" | "requirement-reviewer";
 
 export interface AgentContext {
   issueKey: string;

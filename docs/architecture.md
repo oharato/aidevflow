@@ -69,7 +69,7 @@ flowchart TD
         TechLead["2. Tech-Lead\n(詳細設計レビューエージェント)"]
         Developer["3. Developer\n(実装 & テスト & コミット)"]
         CodeReviewer["4. Code-Reviewer\n(技術的レビュー: 静的解析/型/規約/Gitコンフリクト/言語・依存最新性)"]
-        QA["5. QA\n(要件的レビュー: 要件充足度/マージ整合性)"]
+        ReqReviewer["5. Requirement-Reviewer\n(要件的レビュー: 要件充足度/マージ整合性)"]
     end
 
     ProjectIssues -->|"定期取得"| Poller
@@ -83,7 +83,7 @@ flowchart TD
     Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| TechLead
     Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| Developer
     Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| CodeReviewer
-    Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| QA
+    Dispatcher -->|"CWD = ~/aidevflow/worktrees/STUDY-3"| ReqReviewer
 
     Developer -->|"実装・コミット完了"| GHService
     GHService -->|"git push & gh pr create"| GitHubPRA
@@ -91,7 +91,7 @@ flowchart TD
     GitHubPRA -.->|"PR URL 返却"| Dispatcher
     GitHubPRB -.->|"PR URL 返却"| Dispatcher
 
-    QA -->|"全工程完了 (承認)"| Reporter
+    ReqReviewer -->|"全工程完了 (承認)"| Reporter
     Reporter -->|"PRリンク一覧付きレビュー依頼コメント"| ReviewComment
     ReviewComment --> ProjectIssues
 
@@ -184,7 +184,7 @@ stateDiagram-v2
     技術レビュー中 --> 実装中: code-reviewer差し戻し (バグ/型エラー/古い依存ライブラリ指摘)
 
     %% 人間レビューと完了・差し戻し
-    要件レビュー中 --> 処理済み: qa承認 (全工程完了)\n★ PRリンク付きレビュー依頼コメント投稿
+    要件レビュー中 --> 処理済み: requirement-reviewer承認 (全工程完了)\n★ PRリンク付きレビュー依頼コメント投稿
     処理済み --> 実装中: 人間レビューで修正指示\n(コメント投稿 ＋ ステータス「処理中」に変更)
     処理済み --> 完了: 人間による最終確認 & GitHub PRマージ\n(ステータス「完了」に変更)
 
@@ -245,7 +245,7 @@ Backlog のフリープランや一部下位プランでは、API によるカ�
 | **Tech-Lead (設計レビュー)** | **処理中** (`statusId=2`) | `[設計レビュー中]` | 設計書の客観的レビュー・差し戻し判定 |
 | **Developer (実装)** | **処理中** (`statusId=2`) | `[実装中]` | コード実装、単体テスト、Git コミット |
 | **Code-Reviewer (技術レビュー)** | **処理中** (`statusId=2`) | `[技術レビュー中]` | 静的解析・型・セキュリティ・品質・Gitコンフリクト・言語/依存ライブラリ最新性レビュー |
-| **QA (要件レビュー)** | **処理中** (`statusId=2`) | `[要件レビュー中]` | 元のチケット要件を満たしているかの最終検査・マージ整合性確認 |
+| **Requirement-Reviewer (要件レビュー)** | **処理中** (`statusId=2`) | `[要件レビュー中]` | 元のチケット要件を満たしているかの最終検査・マージ整合性確認 |
 | **全工程完了 (PR レビュー待ち)** | **処理済み** (`statusId=3`) | `[要件レビュー完了]` | 人間による PR レビュー・マージ待ち |
 | **マージ完了** | **完了** (`statusId=4`) | `[要件レビュー完了]` 等 | 人間が PR をマージしてチケットをクローズ |
 
@@ -393,7 +393,7 @@ AGENT_RUNNER=mock pnpm start
 ```
 
 ### 目的
-LLM（Claude や Gemini 等）の実際の呼び出しを行わず、各専門エージェント（Architect, Tech-Lead, Developer, Code-Reviewer, QA）の処理結果・承認・成果物生成を数秒の擬似ディレイとともにシミュレートする動作検証モードです。
+LLM（Claude や Gemini 等）の実際の呼び出しを行わず、各専門エージェント（Architect, Tech-Lead, Developer, Code-Reviewer, Requirement-Reviewer）の処理結果・承認・成果物生成を数秒の擬似ディレイとともにシミュレートする動作検証モードです。
 
 ### 利点と用途
 - **トークン消費ゼロ & 即時検証**: API 課金やレートリミットを気にせず、短時間でエンドツーエンドの挙動を確認可能。

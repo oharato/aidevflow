@@ -7,7 +7,8 @@ export const PHASE_TAGS = {
   techLead: "設計レビュー中",
   developer: "実装中",
   codeReviewer: "技術レビュー中",
-  qa: "要件レビュー中",
+  requirementReviewer: "要件レビュー中",
+  qa: "要件レビュー中", // 後方互換エイリアス
   confirmHuman: "確認待ち",
   completed: "要件レビュー完了",
 
@@ -184,8 +185,9 @@ export function parsePhaseFromSummary(summary: string): {
       return { role: "developer", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
     case PHASE_TAGS.codeReviewer:
       return { role: "code-reviewer", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
+    case PHASE_TAGS.requirementReviewer:
     case PHASE_TAGS.qa:
-      return { role: "qa", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
+      return { role: "requirement-reviewer", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
     case PHASE_TAGS.confirmHuman:
       return { role: null, isWaitingConfirmation: true, isCompleted: false, tag, cleanSummary };
     case PHASE_TAGS.investigationCompleted:
@@ -220,7 +222,7 @@ export function getNextPhaseTag(
           ? PHASE_TAGS.investigationArchitect // 調査中
           : PHASE_TAGS.architect; // 詳細設計中
       case "code-reviewer":
-      case "qa":
+      case "requirement-reviewer":
         return PHASE_TAGS.developer; // 実装中
       default:
         return isInvestigation
@@ -243,8 +245,8 @@ export function getNextPhaseTag(
     case "code-reviewer":
       return isFastMode
         ? PHASE_TAGS.completed // Fastモード時は code-reviewer 承認で要件レビュー完了（全工程完了）
-        : PHASE_TAGS.qa; // 要件レビュー中
-    case "qa":
+        : PHASE_TAGS.requirementReviewer; // 要件レビュー中
+    case "requirement-reviewer":
       return PHASE_TAGS.completed; // 要件レビュー完了
   }
 }

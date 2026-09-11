@@ -13,7 +13,7 @@ const REQUIRED_STATUSES: TargetStatus[] = [
   { name: "設計レビュー中", color: "#868cb7", description: "Tech-Lead (詳細設計レビュー)" },
   { name: "実装中", color: "#eda62a", description: "Developer (コード実装 & コミット)" },
   { name: "技術レビュー中", color: "#b0be3c", description: "Code-Reviewer (技術レビュー: 型/規約/バグ/依存バージョン)" },
-  { name: "要件レビュー中", color: "#e07b9a", description: "QA (要件充足度レビュー)" },
+  { name: "要件レビュー中", color: "#e07b9a", description: "Requirement-Reviewer (要件充足度レビュー)" },
   { name: "確認待ち", color: "#f42858", description: "人間への確認依頼 / 差し戻し上限到達による一時停止" },
 ];
 

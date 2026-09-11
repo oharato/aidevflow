@@ -325,12 +325,12 @@ describe("差し戻し無限ループ防止 & 人間確認エスカレーショ�
       3
     );
 
-    const qaIssue: BacklogIssue = {
+    const reqReviewerIssue: BacklogIssue = {
       ...baseIssue,
-      status: dummyStatuses[5], // 要件レビュー中 (qa)
+      status: dummyStatuses[5], // 要件レビュー中 (requirement-reviewer)
     };
 
-    const res = await dispatcher.processIssue(qaIssue, dummyStatuses);
+    const res = await dispatcher.processIssue(reqReviewerIssue, dummyStatuses);
     expect(res.isEscalation).toBe(false);
     expect(res.nextStatusTarget).toBe("完了");
   });
@@ -374,16 +374,16 @@ error: Individual quota reached. Please upgrade your subscription to increase yo
     expect(lastPostedComment).toContain("Individual quota reached");
   });
 
-  it("最終工程のQA実行が失敗した際、完了（isFinalApproval）にならず安全に一時停止すること", async () => {
-    const quotaErrorOutput = `[エラー] エージェント [qa] が異常終了またはタイムアウトしました (終了コード: 1)。
+  it("最終工程のRequirement-Reviewer実行が失敗した際、完了（isFinalApproval）にならず安全に一時停止すること", async () => {
+    const quotaErrorOutput = `[エラー] エージェント [requirement-reviewer] が異常終了またはタイムアウトしました (終了コード: 1)。
 エラー詳細:
 error: Individual quota reached. Resets in 1h59m24s.`;
 
     const runner = new MockCustomRunner(() => ({
-      role: "qa",
+      role: "requirement-reviewer",
       success: false,
       isRejection: false,
-      summary: "エージェント [qa] が実行されました (終了コード: 1)",
+      summary: "エージェント [requirement-reviewer] が実行されました (終了コード: 1)",
       output: quotaErrorOutput,
     }));
 
@@ -398,12 +398,12 @@ error: Individual quota reached. Resets in 1h59m24s.`;
       3
     );
 
-    const qaIssue: BacklogIssue = {
+    const reqReviewerIssue: BacklogIssue = {
       ...baseIssue,
-      status: dummyStatuses[5], // 要件レビュー中 (qa)
+      status: dummyStatuses[5], // 要件レビュー中 (requirement-reviewer)
     };
 
-    const res = await dispatcher.processIssue(qaIssue, dummyStatuses);
+    const res = await dispatcher.processIssue(reqReviewerIssue, dummyStatuses);
     expect(res.isEscalation).toBe(true);
     expect(res.nextStatusTarget).toBe("確認待ち");
     expect(lastUpdatedStatusId).toBe(7); // 確認待ち (完了の8にならない)
