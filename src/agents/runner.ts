@@ -64,8 +64,6 @@ export class AgyRunner implements IAgentRunner {
         "-p",
         prompt,
         "--dangerously-skip-permissions",
-        "--effort",
-        this.effort,
         "--print-timeout",
         this.timeout,
         "--output-format",
@@ -74,6 +72,14 @@ export class AgyRunner implements IAgentRunner {
 
       if (selectedModel) {
         args.push("--model", selectedModel);
+      }
+
+      // モデル名末尾に -low, -medium, -high が含まれている場合はモデル名自体で effort が指定されているため
+      // --effort を渡すとコンフリクト (conflicts with --effort=...) エラーになる。
+      // モデル名に effort suffix が含まれていない場合のみ --effort を付与する。
+      const hasEffortInModelName = selectedModel && /-(low|medium|high)$/i.test(selectedModel);
+      if (this.effort && !hasEffortInModelName) {
+        args.push("--effort", this.effort);
       }
 
       const startTime = Date.now();
