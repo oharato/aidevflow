@@ -15,10 +15,12 @@
     "dev": "tsx watch src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "setup:statuses": "tsx src/scripts/setup-statuses.ts"
+    "setup:statuses": "tsx src/scripts/setup-statuses.ts",
+    "bee": "bee"
   },
   "packageManager": "pnpm@11.22.0",
   "devDependencies": {
+    "@nulab/bee": "1.1.1",
     "@types/node": "24.13.3",
     "tsx": "4.23.13",
     "typescript": "7.0.2",

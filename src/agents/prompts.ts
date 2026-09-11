@@ -20,6 +20,11 @@ ${context.issueDescription}
 
 === 直近の経緯・コメント ===
 ${commentsText}
+
+=== Backlog CLI (bee) ===
+Backlog 公式 CLI \`bee\` が利用可能です。必要に応じて課題詳細や過去コメントの調査に活用してください:
+- 課題詳細の確認: \`bee issue view ${context.issueKey}\`
+- コメント一覧の確認: \`bee issue comment ${context.issueKey} --list\`
 ==================
 `.trim();
 
