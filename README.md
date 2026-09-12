@@ -107,6 +107,7 @@ pnpm run start:bg
 | **リアルタイムログ監視** | `pnpm run logs` | ログファイル（`logs/aidevflow.jsonl`）をカラー表示で `tail -f` 監視 |
 | **安全停止** | `pnpm run stop` | 実行中タスクの完了を待機してから安全に終了（Graceful Shutdown） |
 | **モック起動 (テスト用)** | `AGENT_RUNNER=mock pnpm start` | LLMを呼ばずトークン消費ゼロで Backlog 連携や PR 作成の流れをシミュレート |
+| **リソース掃除 (手動)** | `pnpm run clean` | 完了チケット & クローズ済み PR の worktree・Docker コンテナを手動一括掃除 |
 | **テスト実行** | `pnpm test` | Vitest による単体・結合テストの実行 |
 
 ---
@@ -120,7 +121,7 @@ pnpm run start:bg
 - 🚀 **[環境構築 & 運用ガイド](docs/setup_guide.md)**
   - 必要要件、`.env` 全パラメータ一覧、Backlog カスタム状態の一括登録、systemd ユーザーサービスによる常駐化手順
 - 🔀 **[複数チケット並行開発 & Git Worktree 仕様書](docs/concurrency_worktree.md)**
-  - `git worktree` による完全分離ディレクトリ構造、`MAX_CONCURRENCY`（ワーカープール）、`inFlightIssues` 二重起動防止、Git 排他制御（Mutex）
+  - `git worktree` による完全分離ディレクトリ構造、`MAX_CONCURRENCY`（ワーカープール）、`inFlightIssues` 二重起動防止、Git 排他制御（Mutex）、完了チケット & クローズ済みPRのリソース自動クリーンアップ (`ResourceCleaner`)
 - ⚡ **[クォータ消費最適化 & 軽量パイプライン仕様書](docs/quota_optimization.md)**
   - Flash モデル標準化、推論エフォート低減、プロンプト圧縮、Fast モード、クォータ枯渇ロック (`.aidevflow.quota.lock`) & Backlog ポーリング休止 & 自動回復・再開 (Auto-Resume)、トークン消費トラッキング、全工程完了時の要件受入確認手順・コマンド案内
 - 🛡️ **[トラブルシューティング & エスカレーション仕様書](docs/troubleshooting.md)**

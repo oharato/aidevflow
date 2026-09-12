@@ -6,6 +6,7 @@ import { QuotaLockManager, type QuotaLockMetadata } from "./quota-lock.js";
 import type { QuotaProbeResult, AgentRole } from "../agents/types.js";
 import { TokenUsageTracker } from "../agents/runner.js";
 import { PHASE_TAGS, formatSummaryWithPhase } from "../backlog/prefix-helper.js";
+import { ResourceCleaner } from "./cleaner.js";
 
 export interface PollerFilterOptions {
   targetIssueType?: string;
@@ -33,6 +34,9 @@ export class BacklogPoller {
   private quotaProbeIntervalSec: number;
   private quotaAutoResume: boolean;
   private lastQuotaLogAt: number = 0;
+  private cleaner: ResourceCleaner;
+  private cleanupIntervalMs: number;
+  private lastCleanupAt: number;
 
   constructor(
     backlog: BacklogClient,
@@ -45,7 +49,9 @@ export class BacklogPoller {
     maxConcurrency: number = 2,
     quotaLockManager?: QuotaLockManager,
     quotaProbeIntervalSec: number = 300,
-    quotaAutoResume: boolean = true
+    quotaAutoResume: boolean = true,
+    cleaner?: ResourceCleaner,
+    cleanupIntervalMinutes?: number
   ) {
     this.backlog = backlog;
     this.dispatcher = dispatcher;
@@ -59,6 +65,28 @@ export class BacklogPoller {
       quotaLockManager || dispatcher.getQuotaLockManager() || new QuotaLockManager();
     this.quotaProbeIntervalSec = quotaProbeIntervalSec;
     this.quotaAutoResume = quotaAutoResume;
+    this.cleaner =
+      cleaner ||
+      new ResourceCleaner(
+        this.backlog,
+        dispatcher.getWorktreeManager(),
+        dispatcher.getGitHubService(),
+        this.logger
+      );
+    const intervalMins =
+      cleanupIntervalMinutes ??
+      parseInt(process.env.CLEANUP_INTERVAL_MINUTES || "30", 10);
+    this.cleanupIntervalMs = Math.max(1, intervalMins) * 60 * 1000;
+    // 起動直後は初回ポーリングを最優先にし、定期間隔後に最初のクリーンアップを実行
+    this.lastCleanupAt = Date.now();
+  }
+
+  getCleaner(): ResourceCleaner {
+    return this.cleaner;
+  }
+
+  async runCleanupNow(): Promise<void> {
+    await this.cleaner.cleanupCompletedIssues(this.inFlightIssues, this.projectStatuses);
   }
 
   getQuotaLockManager(): QuotaLockManager {
@@ -138,6 +166,17 @@ export class BacklogPoller {
           await this.handleQuotaLockedState();
         } else {
           await this.pollOnce(false);
+        }
+
+        // 定期リソースクリーンアップ（完了チケット & クローズ済み PR の worktree / Docker 停止）
+        const now = Date.now();
+        if (now - this.lastCleanupAt >= this.cleanupIntervalMs) {
+          this.lastCleanupAt = now;
+          this.cleaner
+            .cleanupCompletedIssues(this.inFlightIssues, this.projectStatuses)
+            .catch((err) => {
+              console.warn(`[Poller] 定期リソースクリーンアップで例外: ${err.message}`);
+            });
         }
       } catch (err: any) {
         console.error(`[Poller] ポーリングエラー:`, err);

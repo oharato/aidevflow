@@ -128,4 +128,48 @@ describe("BacklogPoller (プロジェクト走査)", () => {
     expect(processedKeys).toContain("STUDY-3");
     expect(processedKeys).not.toContain("STUDY-1");
   });
+
+  it("BacklogPoller に ResourceCleaner が正しく統合され、runCleanupNow でクリーンアップが実行されること", async () => {
+    const mockBacklog = {
+      getProject: async () => ({ id: 100, name: "STUDY" }),
+      getProjectStatuses: async () => [],
+      getIssues: async () => [],
+    } as unknown as BacklogClient;
+
+    const mockDispatcher = {
+      getWorktreeManager: () => ({} as any),
+      getGitHubService: () => ({} as any),
+      getQuotaLockManager: () => undefined,
+      isCustomStatusMode: () => false,
+    } as unknown as AgentDispatcher;
+
+    let cleanupCalled = false;
+    const mockCleaner = {
+      cleanupCompletedIssues: async () => {
+        cleanupCalled = true;
+        return { scannedCount: 0, cleanedCount: 0, skippedCount: 0, cleanedIssues: [] };
+      },
+    } as any;
+
+    const poller = new BacklogPoller(
+      mockBacklog,
+      mockDispatcher,
+      "STUDY",
+      undefined,
+      10,
+      undefined,
+      undefined,
+      2,
+      undefined,
+      300,
+      true,
+      mockCleaner,
+      60 // 60分
+    );
+
+    expect(poller.getCleaner()).toBe(mockCleaner);
+
+    await poller.runCleanupNow();
+    expect(cleanupCalled).toBe(true);
+  });
 });

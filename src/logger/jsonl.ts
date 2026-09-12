@@ -16,6 +16,7 @@ export type EventType =
   | "human_escalation"
   | "quota_locked"
   | "quota_recovered"
+  | "cleanup_completed"
   | "error";
 
 export interface LogEvent {

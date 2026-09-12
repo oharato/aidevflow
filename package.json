@@ -16,6 +16,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "setup:statuses": "tsx src/scripts/setup-statuses.ts",
+    "clean": "tsx src/scripts/clean.ts",
     "bee": "bee"
   },
   "packageManager": "pnpm@11.22.0",

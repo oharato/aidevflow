@@ -52,6 +52,7 @@ cp .env.example .env
 | `QUOTA_LOCK_FILE_PATH`| - | `.aidevflow.quota.lock` | クォータ枯渇ロックファイルの配置パス |
 | `QUOTA_PROBE_INTERVAL_SEC`| - | `300` | クォータ回復プローブの確認間隔（秒） |
 | `QUOTA_AUTO_RESUME` | - | `true` | クォータ回復時の中断チケット自動再開 (`true`/`false`) |
+| `CLEANUP_INTERVAL_MINUTES`| - | `30` | 完了チケット & クローズ済みPRのリソース定期クリーンアップ間隔（分） |
 
 ---
 

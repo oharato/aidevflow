@@ -220,4 +220,76 @@ export class GitWorktreeManager {
       return false;
     }
   }
+
+  /**
+   * 現在 worktree が存在するチケットキーの一覧を取得する
+   */
+  listIssueKeysWithWorktrees(): string[] {
+    if (!fs.existsSync(this.worktreesDir)) {
+      return [];
+    }
+    try {
+      const entries = fs.readdirSync(this.worktreesDir, { withFileTypes: true });
+      return entries.filter((e) => e.isDirectory()).map((e) => e.name);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * 特定チケットの配下にある全リポジトリの worktree 情報一覧を取得する
+   */
+  getIssueWorktreeDirs(issueKey: string): { repoName: string; worktreeDir: string; repoPath: string }[] {
+    const issueBaseDir = path.join(this.worktreesDir, issueKey);
+    if (!fs.existsSync(issueBaseDir)) {
+      return [];
+    }
+
+    try {
+      const entries = fs.readdirSync(issueBaseDir, { withFileTypes: true });
+      const results: { repoName: string; worktreeDir: string; repoPath: string }[] = [];
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const repoName = entry.name;
+          const worktreeDir = path.join(issueBaseDir, repoName);
+          const repoPath = path.join(this.reposDir, repoName);
+          results.push({ repoName, worktreeDir, repoPath });
+        }
+      }
+      return results;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * 特定チケットの全 worktree を安全に削除し、親リポジトリを prune してディレクトリを解放する
+   */
+  async removeIssueWorktrees(issueKey: string): Promise<void> {
+    const targets = this.getIssueWorktreeDirs(issueKey);
+    const issueBaseDir = path.join(this.worktreesDir, issueKey);
+
+    for (const target of targets) {
+      if (fs.existsSync(target.repoPath)) {
+        await this.repoMutex.runExclusive(target.repoName, async () => {
+          try {
+            console.log(`[GitWorktree] worktree を削除中: ${target.worktreeDir}`);
+            await execAsync(`git worktree remove --force "${target.worktreeDir}"`, { cwd: target.repoPath }).catch(() => {});
+            await execAsync(`git worktree prune`, { cwd: target.repoPath }).catch(() => {});
+          } catch (err: any) {
+            console.warn(`[GitWorktree] worktree 削除警告 (${target.repoName}):`, err.message);
+          }
+        });
+      }
+    }
+
+    if (fs.existsSync(issueBaseDir)) {
+      try {
+        fs.rmSync(issueBaseDir, { recursive: true, force: true });
+        console.log(`[GitWorktree] チケットディレクトリを完全削除: ${issueBaseDir}`);
+      } catch (err: any) {
+        console.warn(`[GitWorktree] ディレクトリ削除警告 (${issueBaseDir}):`, err.message);
+      }
+    }
+  }
 }

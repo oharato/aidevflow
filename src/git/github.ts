@@ -16,7 +16,18 @@ export interface PullRequestResult {
   prUrl: string;
 }
 
-export class GitHubService {
+export type PullRequestState = "OPEN" | "CLOSED" | "MERGED" | "NOT_FOUND" | "UNKNOWN";
+
+export interface IGitHubService {
+  ensurePullRequest(worktreeDir: string, options: CreatePullRequestOptions): Promise<string | null>;
+  ensurePullRequests(
+    worktreeTargets: { repoName: string; worktreeDir: string }[],
+    options: CreatePullRequestOptions
+  ): Promise<PullRequestResult[]>;
+  getPullRequestState(worktreeDir: string, branchName?: string): Promise<PullRequestState>;
+}
+
+export class GitHubService implements IGitHubService {
   /**
    * 対象の worktree ディレクトリ内でブランチを push し、GitHub PR を作成または既存 PR の URL を取得する
    */
@@ -110,5 +121,27 @@ export class GitHubService {
     }
 
     return results;
+  }
+
+  /**
+   * 対象の worktree またはブランチの PR 状態（OPEN, CLOSED, MERGED 等）を取得する
+   */
+  async getPullRequestState(worktreeDir: string, branchName?: string): Promise<PullRequestState> {
+    try {
+      const branchArg = branchName ? `"${branchName}"` : "";
+      const cmd = `gh pr view ${branchArg} --json state -q .state`;
+      const { stdout } = await execAsync(cmd, { cwd: worktreeDir });
+      const state = stdout.trim().toUpperCase();
+      if (state === "OPEN" || state === "CLOSED" || state === "MERGED") {
+        return state;
+      }
+      return "UNKNOWN";
+    } catch (err: any) {
+      const msg = (err.message || "").toLowerCase();
+      if (msg.includes("no pull requests found") || msg.includes("could not resolve to a pullrequest")) {
+        return "NOT_FOUND";
+      }
+      return "UNKNOWN";
+    }
   }
 }

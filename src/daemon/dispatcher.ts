@@ -108,6 +108,14 @@ export class AgentDispatcher {
     return this.runner;
   }
 
+  getWorktreeManager(): GitWorktreeManager {
+    return this.worktreeManager;
+  }
+
+  getGitHubService(): GitHubService {
+    return this.githubService;
+  }
+
   setCustomStatusMode(enabled?: boolean): void {
     this.customStatusModeOverride = enabled;
   }
