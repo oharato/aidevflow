@@ -288,7 +288,18 @@ export class GitWorktreeManager {
         fs.rmSync(issueBaseDir, { recursive: true, force: true });
         console.log(`[GitWorktree] チケットディレクトリを完全削除: ${issueBaseDir}`);
       } catch (err: any) {
-        console.warn(`[GitWorktree] ディレクトリ削除警告 (${issueBaseDir}):`, err.message);
+        // Dockerコンテナがroot権限で作成したファイル等のEACCES対策:
+        // Dockerが利用可能な環境であれば、軽量コンテナ（alpine）経由でroot強制クリーンアップを試行
+        const parentDir = path.dirname(issueBaseDir);
+        const baseName = path.basename(issueBaseDir);
+        try {
+          await execAsync(
+            `docker run --rm -v "${parentDir}:/cleanup_root" alpine rm -rf "/cleanup_root/${baseName}"`
+          );
+          console.log(`[GitWorktree] Docker経由でチケットディレクトリを完全削除: ${issueBaseDir}`);
+        } catch {
+          console.warn(`[GitWorktree] ディレクトリ削除警告 (${issueBaseDir}):`, err.message);
+        }
       }
     }
   }
