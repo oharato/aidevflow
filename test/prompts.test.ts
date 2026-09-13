@@ -68,6 +68,16 @@ describe("エージェントプロンプト生成 (buildAgentPrompt)", () => {
     expect(prompt).toContain("Gitコンフリクトの有無、およびコード内にコンフリクトマーカー");
     expect(prompt).toContain("承認（LGTM・全工程完了）");
   });
+
+  it("すべてのエージェントプロンプトの共通ヘッダーに AGENTS.md 最優先遵守指示が含まれていること", () => {
+    const roles = ["spec-writer", "spec-reviewer", "developer", "code-reviewer", "requirement-reviewer"] as const;
+    for (const r of roles) {
+      const prompt = buildAgentPrompt(r, dummyContext);
+      expect(prompt).toContain("=== プロジェクト固有の規約・非機能要件 (AGENTS.md) ===");
+      expect(prompt).toContain("AGENTS.md");
+      expect(prompt).toContain("【絶対遵守ルール】");
+    }
+  });
 });
 
 describe("コメント履歴圧縮 (compressRecentComments)", () => {

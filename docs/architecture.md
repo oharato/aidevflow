@@ -2,6 +2,7 @@
 
 ## 📚 ドキュメント一覧
 - 📝 **[チケット起票テンプレート](TICKET_TEMPLATE.md)** (要件漏れ防止・機能/非機能/DoDチェックリスト)
+- 🤖 **[プロジェクト規約テンプレート (AGENTS.md)](AGENTS_TEMPLATE.md)** (被開発リポジトリ用非機能要件・アーキテクチャ標準の正本テンプレート)
 - 🏛️ **[システムアーキテクチャ仕様書](architecture.md)** (本ドキュメント: 全体構成・状態遷移・エージェント役割)
 - 🚀 **[環境構築 & 運用ガイド](setup_guide.md)** (必要要件・環境変数・systemd常駐化)
 - 🔀 **[並行開発 & Git Worktree 仕様書](concurrency_worktree.md)** (Worktree分離・並行数制御・Git排他制御)
