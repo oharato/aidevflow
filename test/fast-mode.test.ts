@@ -94,6 +94,7 @@ describe("Fastモード（軽量パイプライン: 実装 -> 統合レビュー
     it("本文にモードやパイプラインとして fast が指定されている場合に判定されること", () => {
       expect(isFastModeIssue({ summary: "バグ修正", description: "モード: fast\n軽微なタイポ修正" })).toBe(true);
       expect(isFastModeIssue({ summary: "バグ修正", description: "パイプライン\n- fast\nアイコン変更" })).toBe(true);
+      expect(isFastModeIssue({ summary: "バグ修正", description: "## 2. タスク種別\n- **Fast モード**" })).toBe(true);
       expect(isFastModeIssue({ summary: "通常開発", description: "詳細設計から行ってください" })).toBe(false);
     });
 

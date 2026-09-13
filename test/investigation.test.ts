@@ -119,6 +119,9 @@ describe("調査タスク（実装を伴わない調査・検討・設計パイ�
 
       const bulletDesc = `【概要】\nモード\n- 調査\n検証を実施する。`;
       expect(isInvestigationIssue({ summary: "技術検証", description: bulletDesc })).toBe(true);
+
+      const markdownHeaderDesc = `## 2. タスク種別\n- **技術調査 / Spike**\n\n## 3. 機能要件`;
+      expect(isInvestigationIssue({ summary: "技術検証", description: markdownHeaderDesc })).toBe(true);
     });
   });
 

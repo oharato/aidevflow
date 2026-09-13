@@ -80,7 +80,7 @@ export function isInvestigationIssue(issue: {
   if (issue.description) {
     const desc = issue.description;
     const descPatterns = [
-      /(?:タスク種別|種別|モード|パイプライン|mode|type)\s*[:：\n]\s*[-*]?\s*(?:調査|リサーチ|スパイク|spike|investigation|research)/i,
+      /(?:タスク種別|種別|モード|パイプライン|mode|type)[^\r\n]*[:：\n][^\r\n]*?(?:調査|リサーチ|スパイク|spike|investigation|research)/i,
     ];
     if (descPatterns.some((p) => p.test(desc))) {
       return true;
@@ -130,7 +130,7 @@ export function isFastModeIssue(issue: {
   if (issue.description) {
     const desc = issue.description;
     const descPatterns = [
-      /(?:タスク種別|種別|モード|パイプライン|mode|type)\s*[:：\n]\s*[-*]?\s*(?:fast|軽量|quick)/i,
+      /(?:タスク種別|種別|モード|パイプライン|mode|type)[^\r\n]*[:：\n][^\r\n]*?(?:fast|軽量|quick)/i,
     ];
     if (descPatterns.some((p) => p.test(desc))) {
       return true;
