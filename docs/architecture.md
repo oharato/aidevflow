@@ -4,6 +4,7 @@
 - 📝 **[チケット起票テンプレート](TICKET_TEMPLATE.md)** (要件漏れ防止・機能/非機能/DoDチェックリスト)
 - 🤖 **[プロジェクト規約テンプレート (AGENTS.md)](AGENTS_TEMPLATE.md)** (被開発リポジトリ用非機能要件・アーキテクチャ標準の正本テンプレート)
 - 🏛️ **[システムアーキテクチャ仕様書](architecture.md)** (本ドキュメント: 全体構成・状態遷移・エージェント役割)
+- 🌐 **[Agentic SDLC 業界動向 & アーキテクチャ比較](agentic_sdlc_landscape.md)** (業界動向・命名定義・既存FW比較・Backlog=State設計の強み)
 - 🚀 **[環境構築 & 運用ガイド](setup_guide.md)** (必要要件・環境変数・systemd常駐化)
 - 🔀 **[並行開発 & Git Worktree 仕様書](concurrency_worktree.md)** (Worktree分離・並行数制御・Git排他制御)
 - ⚡ **[クォータ消費最適化 & 軽量パイプライン仕様書](quota_optimization.md)** (Fastモード・モデル最適化)
@@ -13,7 +14,9 @@
 
 ## 1. 概要
 
-`aidevflow` は、チーム開発プラットフォーム **Backlog** のプロジェクト配下にあるチケット（課題）状態の変化を検知し、人間の開発フローに沿った5つの専門 AI エージェント（**`agy` / Antigravity CLI**）を順次ディスパッチする自律型開発パイプラインの常駐デーモン（TypeScript）です。
+`aidevflow` は、チーム開発プラットフォーム **Backlog** のプロジェクト配下にあるチケット（課題）状態の変化を検知し、人間の開発フローに沿った5つの専門 AI エージェントを順次ディスパッチする自律型開発パイプラインの常駐デーモン（TypeScript）です。
+
+エージェント実行基盤は `IAgentRunner` インターフェースで抽象化されており、現在は個人開発・検証用として **Google Antigravity CLI (`agy`)** を使用していますが、社内持ち込み・本番運用時には社内標準の **Anthropic Claude Code (`claude` CLI)** に切り替えて稼働できるマルチランナー設計となっています（将来的なマネージド実行環境として OpenAI Agents API 等のプラグイン追加も可能）。詳細な業界動向とフレームワーク比較は **[docs/agentic_sdlc_landscape.md](agentic_sdlc_landscape.md)** を参照してください。
 
 ### ワークスペース配置仕様（1チケット・複数リポジトリ共存対応）
 1つのチケットで複数リポジトリ（例: フロントエンドとバックエンド）にまたがる改修が発生した場合でも衝突せず共存できるよう、**`~/aidevflow/worktrees/<issueKey>/<repoName>/`** の階層構造を採用しています：
@@ -66,7 +69,7 @@ flowchart TD
         GitHubPRB["Pull Request B (repoB)\n[STUDY-3] タイトル"]
     end
 
-    subgraph Agents["5つの専門エージェント (Antigravity CLI: agy)"]
+    subgraph Agents["5つの専門エージェント (agy / claude / IAgentRunner)"]
         SpecWriter["1. Spec-Writer\n(詳細仕様策定エージェント)"]
         SpecReviewer["2. Spec-Reviewer\n(詳細仕様レビューエージェント)"]
         Developer["3. Developer\n(実装 & テスト & コミット)"]

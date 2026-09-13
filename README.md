@@ -1,6 +1,8 @@
 # aidevflow: Backlog-driven AI Agent Pipeline Daemon
 
-Backlog のチケット状態に応じて、人間の開発フローに沿った 5 つの専門 AI エージェント（**Antigravity CLI: `agy`**）を自律リレーさせ、**複数リポジトリの修正から GitHub プルリクエスト（PR）作成までを完全自動化** する TypeScript 常駐デーモンです。
+Backlog のチケット状態に応じて、人間の開発フローに沿った 5 つの専門 AI エージェントを自律リレーさせ、**複数リポジトリの修正から GitHub プルリクエスト（PR）作成までを完全自動化** する TypeScript 常駐デーモンです。
+
+エージェント実行ランナーは `IAgentRunner` として抽象化されており、現在は個人検証用として **Google Antigravity CLI (`agy`)** を使用していますが、社内運用時には社内標準の **Anthropic Claude Code (`claude` CLI)** に切り替えて安全に稼働できるマルチランナー設計となっています（業界動向や比較は [docs/agentic_sdlc_landscape.md](docs/agentic_sdlc_landscape.md) 参照）。
 
 参考: [食べログ技術ブログ - 対話型をやめて1度の指示でPRができる。人間の開発フローに沿って5つの役割をリレーするAIエージェントパイプラインの設計](https://tech-blog.tabelog.com/entry/autonomous-ai-agent-pipeline-cost-verification_55)
 
@@ -131,6 +133,8 @@ pnpm run start:bg
   - 被開発リポジトリ直下に配置する非機能要件・アーキテクチャ標準・コーディング規約の正本テンプレート。LANアクセス、Docker運用、共通クライアント、DBマイグレーション規約の蓄積用
 - 🏛️ **[システムアーキテクチャ仕様書](docs/architecture.md)**
   - 全体構成図、5役エージェントの責務、Backlog 状態遷移図（Mermaid）、フリープラン（件名プレフィックス）対応マッピング
+- 🌐 **[Agentic SDLC 業界動向 & アーキテクチャ比較](docs/agentic_sdlc_landscape.md)**
+  - Flow Engineering、OpenAI Agents API（Codex Harness）、既存フレームワーク（OpenHands, MetaGPT, LangGraph, CrewAI等）との比較、Backlog as a State Store 設計の優位性
 - 🚀 **[環境構築 & 運用ガイド](docs/setup_guide.md)**
   - 必要要件、`.env` 全パラメータ一覧、Backlog カスタム状態の一括登録、systemd ユーザーサービスによる常駐化手順
 - 🔀 **[複数チケット並行開発 & Git Worktree 仕様書](docs/concurrency_worktree.md)**
