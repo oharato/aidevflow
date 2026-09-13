@@ -13,6 +13,7 @@ export const PHASE_TAGS = {
   techLead: "設計レビュー中",
   qa: "要件レビュー中",
   confirmHuman: "確認待ち",
+  specApprovalWait: "設計承認待ち",
   completed: "要件レビュー完了",
 
   // 調査・検討タスク用フェーズタグ
@@ -198,6 +199,7 @@ export function parsePhaseFromSummary(summary: string): {
     case PHASE_TAGS.qa:
       return { role: "requirement-reviewer", isWaitingConfirmation: false, isCompleted: false, tag, cleanSummary };
     case PHASE_TAGS.confirmHuman:
+    case PHASE_TAGS.specApprovalWait:
       return { role: null, isWaitingConfirmation: true, isCompleted: false, tag, cleanSummary };
     case PHASE_TAGS.investigationCompleted:
     case PHASE_TAGS.completed:
@@ -222,7 +224,8 @@ export function getNextPhaseTag(
   currentRole: AgentRole,
   isRejection: boolean,
   isInvestigation: boolean = false,
-  isFastMode: boolean = false
+  isFastMode: boolean = false,
+  requireHumanSpecApproval: boolean = false
 ): string {
   if (isRejection) {
     switch (currentRole) {
@@ -248,8 +251,12 @@ export function getNextPhaseTag(
         : PHASE_TAGS.specReviewer; // 設計レビュー中
     case "spec-reviewer":
     case "tech-lead" as any:
-      return isInvestigation
-        ? PHASE_TAGS.investigationCompleted // 調査完了
+      if (isInvestigation) {
+        return PHASE_TAGS.investigationCompleted; // 調査完了
+      }
+      // 人間設計レビューゲートが有効な場合は「設計承認待ち」、無効ならそのまま「実装中」
+      return requireHumanSpecApproval
+        ? PHASE_TAGS.specApprovalWait // 設計承認待ち
         : PHASE_TAGS.developer; // 実装中
     case "developer":
       return PHASE_TAGS.codeReviewer; // 技術レビュー中

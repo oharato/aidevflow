@@ -71,6 +71,7 @@ export class AgentDispatcher {
   private lastRoleMap: Map<string, AgentRole> = new Map();
   private customStatusModeOverride?: boolean;
   private quotaLockManager?: QuotaLockManager;
+  private requireHumanSpecApproval: boolean = false;
 
   constructor(
     backlog: BacklogClient,
@@ -82,7 +83,8 @@ export class AgentDispatcher {
     githubService?: GitHubService,
     maxRejectionCount: number = 3,
     customStatusModeOverride?: boolean,
-    quotaLockManager?: QuotaLockManager
+    quotaLockManager?: QuotaLockManager,
+    requireHumanSpecApproval: boolean = false
   ) {
     this.backlog = backlog;
     this.runner = runner;
@@ -94,6 +96,15 @@ export class AgentDispatcher {
     this.maxRejectionCount = maxRejectionCount;
     this.customStatusModeOverride = customStatusModeOverride;
     this.quotaLockManager = quotaLockManager;
+    this.requireHumanSpecApproval = requireHumanSpecApproval;
+  }
+
+  setRequireHumanSpecApproval(enabled: boolean): void {
+    this.requireHumanSpecApproval = enabled;
+  }
+
+  getRequireHumanSpecApproval(): boolean {
+    return this.requireHumanSpecApproval;
   }
 
   setQuotaLockManager(manager?: QuotaLockManager): void {
@@ -150,6 +161,19 @@ export class AgentDispatcher {
     }
 
     const parsed = parsePhaseFromSummary(issue.summary);
+
+    // [設計承認待ち] タグが付いている場合:
+    if (parsed.tag === PHASE_TAGS.specApprovalWait) {
+      // 人間承認待ちの間（未対応）はスキップ
+      if (statusName.includes("未対応")) {
+        return null;
+      }
+      // 人間が設計を承認してステータスを「処理中」に変更した場合は developer (実装) を開始
+      if (statusName.includes("処理中")) {
+        return "developer";
+      }
+      return null;
+    }
 
     // [確認待ち] タグが付いている場合:
     if (parsed.isWaitingConfirmation) {
@@ -240,7 +264,9 @@ export class AgentDispatcher {
       case "spec-writer":
         return "設計レビュー";
       case "spec-reviewer":
-        return isInvestigation ? "完了" : "実装";
+        return isInvestigation
+          ? "完了"
+          : (this.requireHumanSpecApproval ? "確認待ち" : "実装");
       case "developer":
         return "技術レビュー";
       case "code-reviewer":
@@ -627,10 +653,14 @@ export class AgentDispatcher {
         : "エージェントから人間への確認要請がありました";
     }
 
-    // 次ステータスおよび件名の決定
-    let nextStatusTarget: string;
-    let newSummary: string | undefined;
-    let nextStatusId: number | null = null;
+    const isSpecApprovalWait =
+      result.success &&
+      !result.isRejection &&
+      !isEscalation &&
+      !isInvestigation &&
+      role === "spec-reviewer" &&
+      this.requireHumanSpecApproval;
+
     const isFinalApproval =
       result.success &&
       !result.isRejection &&
@@ -638,9 +668,16 @@ export class AgentDispatcher {
       (isInvestigation ? role === "spec-reviewer" : (isFastMode ? role === "code-reviewer" : role === "requirement-reviewer"));
     const isCustom = this.isCustomStatusMode(projectStatuses);
 
+    // 次ステータスおよび件名の決定
+    let nextStatusTarget: string;
+    let newSummary: string | undefined;
+    let nextStatusId: number | null = null;
+
     if (isCustom) {
       // 1. カスタム状態モード (上位プラン等)
       if (isEscalation) {
+        nextStatusTarget = "確認待ち";
+      } else if (isSpecApprovalWait) {
         nextStatusTarget = "確認待ち";
       } else {
         nextStatusTarget = result.success
@@ -658,13 +695,16 @@ export class AgentDispatcher {
         nextStatusId = this.findStatusIdByName(projectStatuses, "未対応") || 1;
       } else {
         const nextPhaseTag = result.success
-          ? getNextPhaseTag(role, result.isRejection ?? false, isInvestigation, isFastMode)
-          : (parsePhaseFromSummary(issue.summary).tag || getNextPhaseTag(role, false, isInvestigation, isFastMode));
+          ? getNextPhaseTag(role, result.isRejection ?? false, isInvestigation, isFastMode, this.requireHumanSpecApproval)
+          : (parsePhaseFromSummary(issue.summary).tag || getNextPhaseTag(role, false, isInvestigation, isFastMode, this.requireHumanSpecApproval));
         newSummary = formatSummaryWithPhase(issue.summary, nextPhaseTag);
         nextStatusTarget = `[${nextPhaseTag}]`;
         if (isFinalApproval) {
           // 全工程完了時は人間レビュー待ちのため「処理済み」へ
           nextStatusId = this.findStatusIdByName(projectStatuses, "処理済み") || 3;
+        } else if (isSpecApprovalWait) {
+          // 人間の設計承認待ち時は「未対応」へ
+          nextStatusId = this.findStatusIdByName(projectStatuses, "未対応") || 1;
         } else {
           // AIリレー中は「処理中」を維持
           nextStatusId = this.findStatusIdByName(projectStatuses, "処理中") || 2;
@@ -756,6 +796,39 @@ export class AgentDispatcher {
         `---`,
         `#### 👤 人間側の対応手順 (再開方法):`,
         restartGuide
+      );
+    } else if (isSpecApprovalWait) {
+      const usageDetail = result.usage?.totalTokens
+        ? `**トークン消費量**: 入力: ${result.usage.inputTokens?.toLocaleString()} / 出力: ${result.usage.outputTokens?.toLocaleString()} (思考: ${result.usage.thinkingTokens?.toLocaleString() || 0}) / 合計: ${result.usage.totalTokens?.toLocaleString()} tokens`
+        : undefined;
+
+      commentLines.push(
+        `### ⏸️ 【設計承認のお願い】AIによる詳細設計および設計レビューが完了しました`,
+        ``,
+        `チケット **${issue.issueKey}: ${newSummary || issue.summary}** に対する詳細設計（spec-writer）および設計レビュー（spec-reviewer）が承認（LGTM）されました。`,
+        ``,
+        `実装フェーズ（developer）へ進む前に、設計内容のご確認とご承認をお願いいたします。`,
+        ``,
+        ...prSectionLines,
+        `- **ブランチ**: \`${issue.issueKey}\``,
+        `- **作業 Worktree**: \`${executionWorkDir}\``,
+        `- **ステータス**: ${nextStatusTarget}`,
+        ...(newSummary ? [`- **新件名**: \`${newSummary}\``] : []),
+        ...(usageDetail ? [usageDetail] : []),
+        ``,
+        `#### 調査・設計レビュー報告:`,
+        result.output,
+        ``,
+        `---`,
+        `#### 👤 人間側の対応手順 (再開方法):`,
+        `- **【設計に問題がない場合 (実装開始)】**:`,
+        `  1. リポジトリ内の詳細設計書（\`docs/detailed_design.md\` や PR 差分等）をご確認ください。`,
+        `  2. 本チケットのステータスを **「処理中」** に変更してください。`,
+        `     - デーモンが検知し、自動的に \`developer\`（実装）が実装フェーズを開始します。`,
+        `- **【設計の修正・方針変更を指示する場合 (AIに再設計させる)】**:`,
+        `  1. 本チケットのコメント欄に修正指示（「〇〇ではなく△△にして」「Bの要件は××で」等）を記入してください。`,
+        `  2. ステータスを **「処理中」** に変更してください。`,
+        `     - （※抜本的な設計見直しを行いたい場合は、件名を \`[詳細設計中]\` に変更してください）`
       );
     } else if (isFinalApproval) {
       if (isInvestigation) {

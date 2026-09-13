@@ -35,6 +35,7 @@ export interface AppConfig {
   quotaLockFilePath: string;
   quotaProbeIntervalSec: number;
   quotaAutoResume: boolean;
+  requireHumanSpecApproval: boolean;
 }
 
 export function loadConfig(): AppConfig {
@@ -62,6 +63,7 @@ export function loadConfig(): AppConfig {
   const quotaLockFilePath = process.env.QUOTA_LOCK_FILE_PATH || ".aidevflow.quota.lock";
   const quotaProbeIntervalSec = Number(process.env.QUOTA_PROBE_INTERVAL_SEC) || 300;
   const quotaAutoResume = process.env.QUOTA_AUTO_RESUME !== "false";
+  const requireHumanSpecApproval = process.env.REQUIRE_HUMAN_SPEC_APPROVAL === "true";
 
   return {
     backlogSpaceId: spaceId,
@@ -88,5 +90,6 @@ export function loadConfig(): AppConfig {
     quotaLockFilePath,
     quotaProbeIntervalSec,
     quotaAutoResume,
+    requireHumanSpecApproval,
   };
 }

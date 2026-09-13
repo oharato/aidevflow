@@ -105,7 +105,8 @@ async function main() {
     githubService,
     config.maxRejectionCount,
     undefined,
-    quotaLockManager
+    quotaLockManager,
+    config.requireHumanSpecApproval
   );
 
   const poller = new BacklogPoller(

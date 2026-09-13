@@ -348,5 +348,146 @@ error: Individual quota reached. Resets in 2h21m6s.`;
     expect(lastUpdatedParams.statusId).toBe(1); // 人間に通知するため「未対応」
     expect(lastPostedComment).toContain("LLMクォータ上限（Quota reached）を検知しました");
   });
+
+  describe("人間の設計承認ゲート (REQUIRE_HUMAN_SPEC_APPROVAL)", () => {
+    it("requireHumanSpecApproval=true の場合、spec-reviewer承認時に[設計承認待ち]（未対応）へ遷移し案内コメントが投稿されること", async () => {
+      const techLeadIssue: BacklogIssue = {
+        ...baseIssue,
+        summary: "[設計レビュー中] 決済APIリファクタリング",
+        status: standardStatuses[1], // 処理中
+      };
+
+      const runner = new MockCustomRunner(() => ({
+        success: true,
+        isRejection: false,
+        summary: "設計LGTM",
+        output: "設計書の内容を承認しました（LGTM）。",
+      }));
+
+      const dispatcher = new AgentDispatcher(
+        mockBacklog,
+        runner,
+        "/mock/payment-service",
+        false,
+        logger,
+        mockWorktreeManager,
+        mockGitHubService,
+        3,
+        undefined,
+        undefined,
+        true // requireHumanSpecApproval: true
+      );
+
+      const res = await dispatcher.processIssue(techLeadIssue, standardStatuses);
+
+      expect(res.newSummary).toBe("[設計承認待ち] 決済APIリファクタリング");
+      expect(lastUpdatedParams.summary).toBe("[設計承認待ち] 決済APIリファクタリング");
+      expect(lastUpdatedParams.statusId).toBe(1); // 人間に承認してもらうため「未対応」へ
+      expect(lastPostedComment).toContain("【設計承認のお願い】AIによる詳細設計および設計レビューが完了しました");
+      expect(lastPostedComment).toContain("人間側の対応手順 (再開方法):");
+    });
+
+    it("[設計承認待ち]（未対応）のチケットはポーリングでスキップされること（resolveRoleがnull）", () => {
+      const waitingIssue: BacklogIssue = {
+        ...baseIssue,
+        summary: "[設計承認待ち] 決済APIリファクタリング",
+        status: standardStatuses[0], // 未対応
+      };
+
+      const runner = new MockCustomRunner(() => ({ success: true, isRejection: false, summary: "", output: "" }));
+      const dispatcher = new AgentDispatcher(
+        mockBacklog,
+        runner,
+        "/mock/payment-service",
+        false,
+        logger,
+        mockWorktreeManager,
+        mockGitHubService,
+        3,
+        undefined,
+        undefined,
+        true
+      );
+
+      expect(dispatcher.resolveRole(waitingIssue, standardStatuses)).toBeNull();
+    });
+
+    it("人間が[設計承認待ち]チケットのステータスを「処理中」に変更した場合、developerが自動起動して実装フェーズに進むこと", async () => {
+      const approvedIssue: BacklogIssue = {
+        ...baseIssue,
+        summary: "[設計承認待ち] 決済APIリファクタリング",
+        status: standardStatuses[1], // 人間が「処理中」に変更
+      };
+
+      let executedRole: AgentRole | null = null;
+      const runner = new MockCustomRunner((role) => {
+        executedRole = role;
+        return {
+          success: true,
+          isRejection: false,
+          summary: "実装完了",
+          output: "コード実装が完了しました。",
+        };
+      });
+
+      const dispatcher = new AgentDispatcher(
+        mockBacklog,
+        runner,
+        "/mock/payment-service",
+        false,
+        logger,
+        mockWorktreeManager,
+        mockGitHubService,
+        3,
+        undefined,
+        undefined,
+        true
+      );
+
+      expect(dispatcher.resolveRole(approvedIssue, standardStatuses)).toBe("developer");
+
+      const res = await dispatcher.processIssue(approvedIssue, standardStatuses);
+
+      expect(executedRole).toBe("developer");
+      expect(res.newSummary).toBe("[技術レビュー中] 決済APIリファクタリング");
+      expect(lastUpdatedParams.summary).toBe("[技術レビュー中] 決済APIリファクタリング");
+      expect(lastUpdatedParams.statusId).toBe(2); // 処理中
+    });
+
+    it("調査タスクの場合は requireHumanSpecApproval=true であっても[設計承認待ち]にならず[調査完了]になること", async () => {
+      const investigationIssue: BacklogIssue = {
+        ...baseIssue,
+        summary: "[調査レビュー中] [調査] 認証基盤の比較検証",
+        status: standardStatuses[1], // 処理中
+      };
+
+      const runner = new MockCustomRunner(() => ({
+        success: true,
+        isRejection: false,
+        summary: "調査LGTM",
+        output: "調査内容を承認しました。",
+      }));
+
+      const dispatcher = new AgentDispatcher(
+        mockBacklog,
+        runner,
+        "/mock/payment-service",
+        false,
+        logger,
+        mockWorktreeManager,
+        mockGitHubService,
+        3,
+        undefined,
+        undefined,
+        true
+      );
+
+      const res = await dispatcher.processIssue(investigationIssue, standardStatuses);
+
+      expect(res.newSummary).toBe("[調査完了] [調査] 認証基盤の比較検証");
+      expect(lastUpdatedParams.summary).toBe("[調査完了] [調査] 認証基盤の比較検証");
+      expect(lastUpdatedParams.statusId).toBe(3); // 処理済み
+    });
+  });
 });
 

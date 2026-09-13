@@ -204,4 +204,79 @@ APIとUIを結合する。
     expect(postedComment).toContain("手元での動作確認（ローカル検証）手順");
     expect(postedComment).toContain("git pull origin \"STUDY-4\"");
   });
+
+  it("カスタム状態モードで requireHumanSpecApproval=true の場合、spec-reviewer承認時に「確認待ち」へ遷移すること", async () => {
+    let postedComment = "";
+    let updatedStatusId: number | null = null;
+    const mockBacklog = {
+      getComments: async () => [],
+      addComment: async (_key: string, comment: string) => {
+        postedComment = comment;
+        return { id: 1 };
+      },
+      updateIssue: async (_key: string, params: { statusId?: number; comment?: string }) => {
+        if (params.comment) postedComment = params.comment;
+        if (params.statusId !== undefined) updatedStatusId = params.statusId;
+        return { id: 1 };
+      },
+      updateIssueStatus: async (_key: string, statusId: number, comment?: string) => {
+        updatedStatusId = statusId;
+        if (comment) postedComment = comment;
+        return { id: 1 };
+      },
+    } as unknown as BacklogClient;
+
+    const dummyRunner = {
+      run: async () => ({
+        success: true,
+        isRejection: false,
+        summary: "設計LGTM",
+        output: "設計を承認しました",
+      }),
+      probeQuotaRecovery: async () => ({ recovered: true }),
+    };
+
+    const dispatcher = new AgentDispatcher(
+      mockBacklog,
+      dummyRunner as any,
+      "/mock/repo",
+      false,
+      undefined,
+      mockWorktreeManager,
+      undefined,
+      3,
+      true, // customStatusModeOverride: true
+      undefined,
+      true // requireHumanSpecApproval: true
+    );
+
+    const customStatuses: BacklogStatus[] = [
+      { id: 1, projectId: 100, name: "未対応", color: "#ed8077", displayOrder: 1 },
+      { id: 2, projectId: 100, name: "詳細設計中", color: "#3b9dbd", displayOrder: 2 },
+      { id: 3, projectId: 100, name: "設計レビュー中", color: "#868cb7", displayOrder: 3 },
+      { id: 4, projectId: 100, name: "実装中", color: "#eda62a", displayOrder: 4 },
+      { id: 5, projectId: 100, name: "確認待ち", color: "#f42858", displayOrder: 5 },
+      { id: 6, projectId: 100, name: "完了", color: "#2779ca", displayOrder: 6 },
+    ];
+
+    const issue: BacklogIssue = {
+      id: 1003,
+      projectId: 100,
+      issueKey: "STUDY-6",
+      keyId: 6,
+      issueType: { id: 1, name: "タスク" },
+      summary: "アーキテクチャ刷新",
+      description: "要件説明",
+      status: customStatuses[2], // 設計レビュー中
+      createdUser: { id: 1, name: "ユーザー" },
+      created: "2026-09-09T00:00:00Z",
+      updated: "2026-09-09T00:00:00Z",
+    };
+
+    const result = await dispatcher.processIssue(issue, customStatuses);
+
+    expect(result.handled).toBe(true);
+    expect(updatedStatusId).toBe(5); // 確認待ち
+    expect(postedComment).toContain("【設計承認のお願い】AIによる詳細設計および設計レビューが完了しました");
+  });
 });
