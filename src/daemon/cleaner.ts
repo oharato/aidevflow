@@ -22,6 +22,7 @@ export interface CleanupSummary {
   cleanedCount: number;
   skippedCount: number;
   cleanedIssues: CleanedIssueReport[];
+  orphanDockerProjects?: string[];
 }
 
 export class ResourceCleaner {
@@ -111,18 +112,86 @@ export class ResourceCleaner {
   }
 
   /**
+   * aidevflow/worktrees 配下のパスで起動されたまま残っている孤児 Docker Compose プロジェクトを停止・削除する
+   */
+  async cleanOrphanDockerContainers(inFlightIssues: Set<string> = new Set()): Promise<string[]> {
+    const stoppedProjects: string[] = [];
+    try {
+      const { stdout } = await execAsync(
+        'docker ps --filter "label=com.docker.compose.project" --format "{{.ID}}\t{{index .Labels \\"com.docker.compose.project\\"}}\t{{index .Labels \\"com.docker.compose.project.working_dir\\"}}"'
+      );
+      if (!stdout.trim()) return stoppedProjects;
+
+      const lines = stdout.trim().split("\n");
+      const projectMap = new Map<string, { workingDir: string; issueKey?: string }>();
+
+      for (const line of lines) {
+        const parts = line.split("\t");
+        if (parts.length < 3) continue;
+        const projectName = parts[1]?.trim();
+        const workingDir = parts[2]?.trim();
+        if (!projectName || !workingDir) continue;
+
+        const match = workingDir.match(/[/\\]worktrees[/\\]([^/\\]+)/);
+        if (match) {
+          const issueKey = match[1];
+          projectMap.set(projectName, { workingDir, issueKey });
+        }
+      }
+
+      for (const [projectName, { workingDir, issueKey }] of projectMap.entries()) {
+        if (issueKey && inFlightIssues.has(issueKey)) {
+          continue;
+        }
+
+        let shouldClean = false;
+        if (!fs.existsSync(workingDir)) {
+          console.log(`[Cleaner] 🔍 作業ディレクトリが既に存在しない孤児 Docker プロジェクトを検知: ${projectName} (${workingDir})`);
+          shouldClean = true;
+        } else if (issueKey) {
+          try {
+            const issue = await this.backlog.getIssue(issueKey);
+            if (this.isCompletedStatus(issue.status.name)) {
+              shouldClean = true;
+            }
+          } catch {
+            shouldClean = true;
+          }
+        }
+
+        if (shouldClean) {
+          console.log(`[Cleaner] 🛑 孤児 Docker Compose プロジェクトを停止・破棄中: ${projectName}`);
+          try {
+            await execAsync(`docker compose -p "${projectName}" down -v --remove-orphans`);
+            stoppedProjects.push(projectName);
+            console.log(`[Cleaner] ✅ 孤児 Docker Compose 停止完了: ${projectName}`);
+          } catch (err: any) {
+            console.warn(`[Cleaner] 孤児 Docker Compose 停止警告 (${projectName}):`, err.message);
+          }
+        }
+      }
+    } catch {
+      // docker コマンド非対応環境等は無視
+    }
+
+    return stoppedProjects;
+  }
+
+  /**
    * 完了済みかつPRがclose/mergedのチケットのworktreeとDockerコンテナを一括クリーンアップ
    */
   async cleanupCompletedIssues(
     inFlightIssues: Set<string> = new Set(),
     projectStatuses?: BacklogStatus[]
   ): Promise<CleanupSummary> {
+    const orphanDockerProjects = await this.cleanOrphanDockerContainers(inFlightIssues);
     const issueKeys = this.worktreeManager.listIssueKeysWithWorktrees();
     const summary: CleanupSummary = {
       scannedCount: issueKeys.length,
       cleanedCount: 0,
       skippedCount: 0,
       cleanedIssues: [],
+      orphanDockerProjects,
     };
 
     if (issueKeys.length === 0) {

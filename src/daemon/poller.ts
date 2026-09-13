@@ -154,6 +154,12 @@ export class BacklogPoller {
 
     try {
       await this.init();
+      // 起動時初回クリーンアップ（停止中に完了・マージされたチケットのリソースや孤児コンテナを非同期でお掃除）
+      this.cleaner
+        .cleanupCompletedIssues(this.inFlightIssues, this.projectStatuses)
+        .catch((err) => {
+          console.warn(`[Poller] 起動時リソースクリーンアップで例外: ${err.message}`);
+        });
     } catch (err: any) {
       console.error(`[Poller] 初期化エラー (プロジェクトまたはステータス取得失敗):`, err);
       this.logger?.error("error", `初期化エラー: ${err.message}`);
@@ -191,6 +197,14 @@ export class BacklogPoller {
     this.isRunning = false;
     await this.waitForActiveTasks();
     console.log(`[Poller] 全アクティブタスクが完了しました。`);
+
+    // 停止時リソースクリーンアップ
+    try {
+      await this.cleaner.cleanupCompletedIssues(this.inFlightIssues, this.projectStatuses);
+    } catch (err: any) {
+      console.warn(`[Poller] 停止時リソースクリーンアップで例外: ${err.message}`);
+    }
+
     this.logger?.info("daemon_stop", `デーモン停止`);
   }
 

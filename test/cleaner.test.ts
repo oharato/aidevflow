@@ -235,10 +235,24 @@ describe("ResourceCleaner (完了チケット & クローズ済みPRのリソー
     } as unknown as GitWorktreeManager;
 
     const cleaner = new ResourceCleaner(mockBacklog, mockWorktreeManager, {} as any);
+    // cleanOrphanDockerContainers をモック
+    vi.spyOn(cleaner, "cleanOrphanDockerContainers").mockResolvedValue([]);
     const summary = await cleaner.cleanupCompletedIssues();
 
     expect(summary.scannedCount).toBe(0);
     expect(summary.cleanedCount).toBe(0);
     expect(mockBacklog.getIssue).not.toHaveBeenCalled();
+  });
+
+  it("孤児 Docker Compose プロジェクトが存在する場合、自動検知されて停止されること", async () => {
+    const cleaner = new ResourceCleaner({} as any, {} as any, {} as any);
+    vi.spyOn(cleaner, "cleanOrphanDockerContainers").mockResolvedValue(["company-search-inquiry"]);
+    const mockWorktreeManager = {
+      listIssueKeysWithWorktrees: () => [],
+    } as any;
+    (cleaner as any).worktreeManager = mockWorktreeManager;
+
+    const summary = await cleaner.cleanupCompletedIssues();
+    expect(summary.orphanDockerProjects).toEqual(["company-search-inquiry"]);
   });
 });
