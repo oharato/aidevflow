@@ -108,7 +108,37 @@ pnpm run start:bg
 | :--- | :--- | :--- | :--- |
 | **通常モード** | 通常のチケット作成 | `spec-writer` → `spec-reviewer` → `developer` → `code-reviewer` → `requirement-reviewer` (5段階) | 新機能開発や大規模改修向け |
 | ⚡ **Fast モード** | 件名に `[fast]` を付与、または本文に `mode: fast` | `developer` → `code-reviewer` (2段階で即PR作成・完了) | 既知のバグ修正・文言修正・軽微な変更用（クォータ消費を約 60% 削減） |
-| 🔍 **調査モード** | 件名に `[調査]` を付与、または種別・カテゴリーを「調査」 | `spec-writer` → `spec-reviewer` (2段階で調査ドキュメント作成・完了) | 技術選定・比較検証・アーキテクチャ設計用（コード実装をスキップして完了） |
+| 🔍 **Research モード** | 件名に `[research]`（または `[調査]`）を付与、または種別を「調査」 | `spec-writer` → `spec-reviewer` (2段階で調査ドキュメント作成・完了) | 技術選定・比較検証・アーキテクチャ設計用（コード実装をスキップして完了） |
+
+---
+
+## 🎼 宣言的ワークフロー & カスタマイズ (`workflows/`)
+
+TAKT および Just Do It (jdi) の思想を統合し、YAML による宣言的なステップ定義とプロンプトのファイル管理に対応しています。
+被開発リポジトリ側には一切設定を置かず、常駐デーモン側の `workflows/` 配下で一元管理されます：
+
+```
+workflows/
+├── default/                         # 【標準】5役多段SOP
+│   ├── workflow.yaml
+│   └── prompts/                     # spec-writer.md, developer.md など
+├── fast/                            # 【高速】2段階 (dev -> review)
+│   └── workflow.yaml
+├── research/                        # 【調査・設計】2段階 (spec -> review)
+│   └── workflow.yaml
+└── <PROJECT_KEY>/                   # 【プロジェクト固有カスタマイズ】
+    │                                # default をディレクトリごとコピーして作成
+    ├── workflow.yaml
+    └── prompts/
+        └── code-reviewer.md         # 上書きしたいプロンプトだけ配置・編集可能
+```
+
+- **コピーしてそのまま使えるゼロコンフィグ設計**:
+  - `workflows/default` を丸ごとコピー（`cp -r workflows/default workflows/MYPROJECT`）するだけで、ファイル名のリネームなしに即座にプロジェクト固有のステップやプロンプトのカスタマイズ（Eject）が可能です。
+- **決定キーワード（`<!-- DECISION: ... -->`）**:
+  - LLM の言い回しの揺らぎに左右されない HTML コメント形式の明確な決定トークンで遷移を制御（自然言語判定への自動フォールバック付き）。
+- **権限制御（`edit: false`）による多層防御**:
+  - レビュアー役のステップでは、プロンプト制約・CLIツール制限・Git自動ロールバック（`PermissionGuard`）の 3 層でファイルの勝手な改変やコミットを物理的・論理的に防止します。
 
 ---
 
@@ -147,3 +177,6 @@ pnpm run start:bg
   - Flash モデル標準化、推論エフォート低減、プロンプト圧縮、Fast モード、クォータ枯渇ロック (`.aidevflow.quota.lock`) & Backlog ポーリング休止 & 自動回復・再開 (Auto-Resume)、トークン消費トラッキング、全工程完了時の要件受入確認手順・コマンド案内
 - 🛡️ **[トラブルシューティング & エスカレーション仕様書](docs/troubleshooting.md)**
   - 差し戻し無限ループ防止 (`MAX_REJECTION_COUNT`)、AIからの質問エスカレーション (`【人間への確認依頼】`)、LLM クォータ制限時の安全停止と自動・手動復帰手順、二重起動防止ロック
+- 🎼 **[宣言的ワークフローエンジン & 権限制御設計書](docs/declarative_workflow_engine_design.md)**
+  - TAKT および Just Do It (jdi) の思想を統合した YAML 宣言的ステップ定義、決定キーワード（`<!-- DECISION: ... -->`）による堅牢なルーティング、レビュアー権限制御（`edit: false`）による多層防御アーキテクチャ
+

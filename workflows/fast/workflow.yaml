@@ -1,0 +1,35 @@
+name: fast
+description: "Fastモード軽量開発パイプライン (dev -> integrated review)"
+initial_step: developer
+max_steps: 10
+
+steps:
+  developer:
+    role: developer
+    title: "コード実装・テスト・PR作成"
+    backlog_tag: "[実装中]"
+    custom_status: "実装"
+    edit: true
+    rules:
+      - if: IMPLEMENTED
+        goto: code-reviewer
+      - if: HUMAN_REQUIRED
+        goto: developer
+        human_escalation: true
+      - goto: code-reviewer
+
+  code-reviewer:
+    role: code-reviewer
+    title: "統合レビュー (技術観点 + 要件充足度)"
+    backlog_tag: "[技術レビュー中]"
+    custom_status: "技術レビュー"
+    edit: false
+    rules:
+      - if: APPROVED
+        goto: COMPLETE
+      - if: REJECTED
+        goto: developer
+      - if: HUMAN_REQUIRED
+        goto: code-reviewer
+        human_escalation: true
+      - goto: COMPLETE

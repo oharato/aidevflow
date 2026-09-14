@@ -1,4 +1,5 @@
 import type { AgentRole, AgentContext } from "./types.js";
+import { READONLY_INSTRUCTION } from "../workflow/types.js";
 
 /**
  * クォータ削減のため、過去コメントからAIの長大ログを要約・トリムし、
@@ -71,6 +72,19 @@ export function compressRecentComments(rawComments: string[], maxTotalChars: num
   return result;
 }
 
+function buildDecisionInstruction(
+  allowedDecisions: Array<{ keyword: string; description: string }>
+): string {
+  const list = allowedDecisions
+    .map((d) => `- ${d.description}: <!-- DECISION: ${d.keyword} -->`)
+    .join("\n");
+  return `
+【決定キーワードの出力ルール（必須）】
+出力の最終行（または結論の直後）に、処理結果に応じた以下の決定トークンを必ず HTML コメント形式で単独行に出力してください:
+${list}
+※エスカレーション不要な場合は <!-- DECISION: HUMAN_REQUIRED --> を絶対に出力しないでください。`.trim();
+}
+
 export function buildAgentPrompt(role: AgentRole, context: AgentContext): string {
   const commentsText = compressRecentComments(context.recentComments);
 
@@ -93,7 +107,7 @@ Backlog 公式 CLI \`bee\` が利用可能です。必要に応じて課題詳�
 === プロジェクト固有の規約・非機能要件 (AGENTS.md) ===
 作業対象リポジトリ直下に \`AGENTS.md\`（または \`CLAUDE.md\`、\`GEMINI.md\`）が存在する場合、そこに記載されたプロジェクト共通の規約、非機能要件（LAN/ネットワークアクセス、Docker設定、外部サービス・共通クライアント、DBマイグレーション方針、バージョン固定規約等）は【絶対遵守ルール】です。
 必ず最優先で確認し、設計・実装・レビューのすべてのフェーズでその規約に従ってください。
-==================
+==================${context.readOnly ? `\n\n${READONLY_INSTRUCTION}` : ""}
 `.trim();
 
   switch (role) {
@@ -120,7 +134,12 @@ Backlog 公式 CLI \`bee\` が利用可能です。必要に応じて課題詳�
 5. 【人間への確認依頼】:
    - 調査の過程で方針の選択肢が複数存在する場合や、要件の過不足・方向性に関して人間の意思決定が必要な場合は、論点と選択肢（推奨案付き）を整理した上で「【人間への確認依頼】」または「CONFIRM_HUMAN」と明記してエスカレーションしてください（※自律解決可能でエスカレーションが不要な場合は、これらのキーワードを出力文中に含めないでください）。
 
-作業が完了したら、調査結果・仕様（設計）内容の要約と、修正・作成したリポジトリファイル一覧、および「次は spec-reviewer による調査・仕様レビューです」と報告してください。`;
+作業が完了したら、調査結果・仕様（設計）内容の要約と、修正・作成したリポジトリファイル一覧、および「次は spec-reviewer による調査・仕様レビューです」と報告してください。
+
+${buildDecisionInstruction([
+  { keyword: "PLANNED", description: "計画・調査・仕様策定完了時" },
+  { keyword: "HUMAN_REQUIRED", description: "人間の確認・判断が必要な時" },
+])}`;
       }
 
       return `${baseHeader}
@@ -144,7 +163,12 @@ Backlog 公式 CLI \`bee\` が利用可能です。必要に応じて課題詳�
    - 洗い出した関連要件（B）について、一般的なベストプラクティスに基づき自律設計できるものは「前提・方針」として設計書に明記する
    - 一方、**ビジネス仕様・UI挙動・方針選択において複数の妥当な選択肢があり、自律判断すべきでない場合**（例: 「0件ヒット時の表示方針」「外部APIとローカルモデルの併用方針」等）は、論点と選択肢（推奨案付き）を整理した上で「【人間への確認依頼】」または「CONFIRM_HUMAN」と明記してエスカレーションしてください（※自律解決可能でエスカレーションが不要な場合は、これらのキーワードを出力文中に含めないでください）。
 
-作業が完了したら、仕様・設計内容の要約（洗い出した関連要件Bへの対応方針を含む）と「次は spec-reviewer による詳細仕様レビューです」と報告してください。`;
+作業が完了したら、仕様・設計内容の要約（洗い出した関連要件Bへの対応方針を含む）と「次は spec-reviewer による詳細仕様レビューです」と報告してください。
+
+${buildDecisionInstruction([
+  { keyword: "PLANNED", description: "詳細仕様策定・設計完了時" },
+  { keyword: "HUMAN_REQUIRED", description: "人間の確認・判断が必要な時" },
+])}`;
 
     case "spec-reviewer":
       if (context.isInvestigation) {
@@ -165,7 +189,13 @@ spec-writerが作成した調査報告書・仕様書（設計書）やリポジ
 3. 軽微な誤字脱字やフォーマット修正があれば、リポジトリ内のファイルを直接修正・コミットしても構いません
 4. 懸念点や重大な不足、再調査すべき箇所があれば、具体的に指摘し「spec-writerへ差し戻し」と明記する
 5. 根本的な方針決定など人間の判断が必要な場合は、「【人間への確認依頼】」または「CONFIRM_HUMAN」と明記してエスカレーションしてください（※エスカレーションが不要な場合は、これらのキーワードを出力文中に含めないでください）。
-6. 問題がなければ「承認（LGTM）」し、「次は全工程完了（調査完了）です」と報告してください。`;
+6. 問題がなければ「承認（LGTM）」し、「次は全工程完了（調査完了）です」と報告してください。
+
+${buildDecisionInstruction([
+  { keyword: "APPROVED", description: "レビュー承認（LGTM）時" },
+  { keyword: "REJECTED", description: "レビュー差し戻し（REJECT）時" },
+  { keyword: "HUMAN_REQUIRED", description: "人間の確認・判断が必要な時" },
+])}`;
       }
 
       return `${baseHeader}
@@ -184,7 +214,13 @@ spec-writerが作成した詳細仕様書（設計書）の妥当性を客観的
      - 実機での動作確認を可能にする検証用シードデータが考慮されているか
 3. 懸念点や修正すべき箇所があれば、具体的に指摘し「spec-writerへ差し戻し」と明記する
 4. 要件自体の根本的な見直しや人間の意思決定が必要な場合は、「【人間への確認依頼】」または「CONFIRM_HUMAN」と明記してエスカレーションしてください（※エスカレーションが不要な場合は、これらのキーワードを出力文中に含めないでください）。
-5. 問題がなければ「承認（LGTM）」し、「次は developer による実装です」と報告してください。`;
+5. 問題がなければ「承認（LGTM）」し、「次は developer による実装です」と報告してください。
+
+${buildDecisionInstruction([
+  { keyword: "APPROVED", description: "レビュー承認（LGTM）時" },
+  { keyword: "REJECTED", description: "レビュー差し戻し（REJECT）時" },
+  { keyword: "HUMAN_REQUIRED", description: "人間の確認・判断が必要な時" },
+])}`;
 
     case "developer":
       return `${baseHeader}
@@ -198,7 +234,12 @@ spec-writerが作成した詳細仕様書（設計書）の妥当性を客観的
 2. ベースブランチ（main/master等）とのGitコンフリクトが発生していないこと、およびソースコード内にコンフリクトマーカー（<<<<<<<, =======, >>>>>>>）が残っていないことを確認する
 3. 変更内容をコミットする
 4. 設計書通りに実装できない技術的障壁や、仕様判断が必要な不明点があれば、論点を整理した上で「【人間への確認依頼】」または「CONFIRM_HUMAN」と明記してエスカレーションしてください（※自律解決可能でエスカレーションが不要な場合は、これらのキーワードを出力文中に含めないでください）。
-作業が完了したら、実装した差分の要約と「次は code-reviewer による技術レビューです」と報告してください。`;
+作業が完了したら、実装した差分の要約と「次は code-reviewer による技術レビューです」と報告してください。
+
+${buildDecisionInstruction([
+  { keyword: "IMPLEMENTED", description: "実装・テスト・コミット完了時" },
+  { keyword: "HUMAN_REQUIRED", description: "人間の確認・判断が必要な時" },
+])}`;
 
     case "code-reviewer":
       if (context.isFastMode) {
@@ -219,7 +260,13 @@ developerの実装したコードに対して、技術的品質（バグ・セ�
 4. チケット要件が満たされているか照合する
 5. バグ、型エラー、セキュリティ脆弱性、テスト不足、Gitコンフリクト、古い依存バージョン等の問題があれば具体的に指摘し「developerへ差し戻し」と明記する
 6. アーキテクチャの大幅な変更や外部要因など人間側の判断が必要な場合は、「【人間への確認依頼】」または「CONFIRM_HUMAN」と明記してエスカレーションしてください（※自律解決可能でエスカレーションが不要な場合は、これらのキーワードを出力文中に含めないでください）。
-7. 問題がなければ「承認（LGTM・全工程完了）」とし、「次は全工程完了（要件レビュー完了）です」と報告してください。`;
+7. 問題がなければ「承認（LGTM・全工程完了）」とし、「次は全工程完了（要件レビュー完了）です」と報告してください。
+
+${buildDecisionInstruction([
+  { keyword: "APPROVED", description: "レビュー承認（LGTM・全工程完了）時" },
+  { keyword: "REJECTED", description: "レビュー差し戻し（REJECT）時" },
+  { keyword: "HUMAN_REQUIRED", description: "人間の確認・判断が必要な時" },
+])}`;
       }
 
       return `${baseHeader}
@@ -240,7 +287,13 @@ developerの実装したコードに対して、技術的品質（バグ・セ�
 4. リポジトリ直下の \`AGENTS.md\` に記載された非機能要件・アーキテクチャ規約（LANアクセス設定、Dockerボリューム権限、共通モジュール利用、DBマイグレーション等）が遵守されているかを検証する
 5. バグ、型エラー、セキュリティ脆弱性、テスト不足、Gitコンフリクト、古い依存バージョン、規約違反等の問題があれば具体的に指摘し「developerへ差し戻し」と明記する
 6. アーキテクチャの大幅な変更や外部要因など人間側の判断が必要な場合は、「【人間への確認依頼】」または「CONFIRM_HUMAN」と明記してエスカレーションしてください（※自律解決可能でエスカレーションが不要な場合は、これらのキーワードを出力文中に含めないでください）。
-7. 技術的に問題がなければ「技術観点LGTM」とし、「次は requirement-reviewer による要件レビューです」と報告してください。`;
+7. 技術的に問題がなければ「技術観点LGTM」とし、「次は requirement-reviewer による要件レビューです」と報告してください。
+
+${buildDecisionInstruction([
+  { keyword: "APPROVED", description: "レビュー承認（LGTM）時" },
+  { keyword: "REJECTED", description: "レビュー差し戻し（REJECT）時" },
+  { keyword: "HUMAN_REQUIRED", description: "人間の確認・判断が必要な時" },
+])}`;
 
     case "requirement-reviewer":
       return `${baseHeader}
@@ -253,6 +306,12 @@ developerの実装したコードに対して、技術的品質（バグ・セ�
 2. ベースブランチとの競合やコンフリクトマーカーの残留など、成果物のマージを阻害する不整合がないか確認する
 3. 不足や不整合があれば具体的に指摘し「developerへ差し戻し」と明記する
 4. チケット要件自体の矛盾や仕様変更の要否など、人間の判断が必要な場合は、「【人間への確認依頼】」または「CONFIRM_HUMAN」と明記してエスカレーションしてください（※自律解決可能でエスカレーションが不要な場合は、これらのキーワードを出力文中に含めないでください）。
-5. 要件を満たしていれば「要件観点LGTM（全工程完了）」と報告してください。`;
+5. 要件を満たしていれば「要件観点LGTM（全工程完了）」と報告してください。
+
+${buildDecisionInstruction([
+  { keyword: "APPROVED", description: "レビュー承認（LGTM・全工程完了）時" },
+  { keyword: "REJECTED", description: "レビュー差し戻し（REJECT）時" },
+  { keyword: "HUMAN_REQUIRED", description: "人間の確認・判断が必要な時" },
+])}`;
   }
 }

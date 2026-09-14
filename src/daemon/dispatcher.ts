@@ -22,6 +22,10 @@ import {
   isFastModeIssue,
 } from "../backlog/prefix-helper.js";
 import { QuotaLockManager, parseResetDuration } from "./quota-lock.js";
+import { loadWorkflow } from "../workflow/loader.js";
+import { WorkflowEngine } from "../workflow/engine.js";
+import { PermissionGuard, type GitSnapshot } from "../workflow/permission.js";
+import { parseDecision } from "../workflow/decision.js";
 
 export interface ProcessIssueResult {
   handled: boolean;
@@ -72,6 +76,7 @@ export class AgentDispatcher {
   private customStatusModeOverride?: boolean;
   private quotaLockManager?: QuotaLockManager;
   private requireHumanSpecApproval: boolean = false;
+  private permissionGuard: PermissionGuard;
 
   constructor(
     backlog: BacklogClient,
@@ -84,7 +89,8 @@ export class AgentDispatcher {
     maxRejectionCount: number = 3,
     customStatusModeOverride?: boolean,
     quotaLockManager?: QuotaLockManager,
-    requireHumanSpecApproval: boolean = false
+    requireHumanSpecApproval: boolean = false,
+    permissionGuard?: PermissionGuard
   ) {
     this.backlog = backlog;
     this.runner = runner;
@@ -97,6 +103,15 @@ export class AgentDispatcher {
     this.customStatusModeOverride = customStatusModeOverride;
     this.quotaLockManager = quotaLockManager;
     this.requireHumanSpecApproval = requireHumanSpecApproval;
+    this.permissionGuard = permissionGuard || new PermissionGuard();
+  }
+
+  getPermissionGuard(): PermissionGuard {
+    return this.permissionGuard;
+  }
+
+  setPermissionGuard(guard: PermissionGuard): void {
+    this.permissionGuard = guard;
   }
 
   setRequireHumanSpecApproval(enabled: boolean): void {
@@ -496,6 +511,18 @@ export class AgentDispatcher {
     const isInvestigation = isInvestigationIssue(issue);
     const isFastMode = isFastModeIssue(issue);
 
+    // ワークフロー定義の解決とステップ情報の取得
+    const projectKey = issue.issueKey.split("-")[0];
+    const workflowDef = loadWorkflow({
+      isFastMode,
+      isInvestigation,
+      projectKey,
+    });
+    const currentStep =
+      workflowDef.steps[role] ||
+      Object.values(workflowDef.steps).find((s) => s.role === role);
+    const editAllowed = currentStep ? currentStep.edit : (role === "spec-writer" || role === "developer");
+
     const context: AgentContext = {
       issueKey: issue.issueKey,
       issueSummary: issue.summary,
@@ -504,7 +531,17 @@ export class AgentDispatcher {
       workDir: executionWorkDir,
       isInvestigation,
       isFastMode,
+      readOnly: !editAllowed,
     };
+
+    // 権限制御 (edit: false) の場合、実行前の Git 状態スナップショットを記録
+    const gitSnapshots: GitSnapshot[] = [];
+    if (!editAllowed) {
+      for (const target of worktreeTargets) {
+        const snap = await this.permissionGuard.snapshot(target.worktreeDir);
+        gitSnapshots.push(snap);
+      }
+    }
 
     // 3. エージェント実行
     const startTime = Date.now();
@@ -519,6 +556,20 @@ export class AgentDispatcher {
 
     const result = await this.runner.run(role, context);
     const durationMs = Date.now() - startTime;
+
+    // 権限制御 (edit: false) の場合、実行後の状態を検証し不正変更があれば即時ロールバック
+    const rollbackReasons: string[] = [];
+    if (!editAllowed) {
+      for (const snap of gitSnapshots) {
+        const rbResult = await this.permissionGuard.verifyAndRollback(snap);
+        if (rbResult.rolledBack) {
+          rollbackReasons.push(...rbResult.reasons);
+        }
+      }
+      if (rollbackReasons.length > 0) {
+        console.warn(`[Dispatcher] ⚠️ レビュアーによる不正変更を検知・ロールバックしました:`, rollbackReasons);
+      }
+    }
 
     const cumulativeTotals = TokenUsageTracker.getTotals();
     this.logger?.info("agent_finish", `エージェント [${role}] 実行完了 (${durationMs}ms)`, {
@@ -538,21 +589,24 @@ export class AgentDispatcher {
     });
 
     // 4. 未コミットのドキュメントや修正ファイルが残っている場合、自動でステージング & コミットして保護
-    for (const target of worktreeTargets) {
-      try {
-        const { stdout: statusOut } = await execAsync("git status --porcelain", {
-          cwd: target.worktreeDir,
-        });
-        if (statusOut && statusOut.trim().length > 0) {
-          console.log(`[Dispatcher] 未コミットの変更・ドキュメントを検出 (${target.repoName})。自動コミットします...`);
-          await execAsync("git add -A", { cwd: target.worktreeDir });
-          const commitMsg = isInvestigation
-            ? `docs(${role}): record investigation and design artifacts for ${issue.issueKey}`
-            : `chore(${role}): auto commit repository artifacts for ${issue.issueKey}`;
-          await execAsync(`git commit -m "${commitMsg}"`, { cwd: target.worktreeDir });
+    // (edit: true なステップのみ実行。レビュアー役の不正変更は PermissionGuard で既に破棄済み)
+    if (editAllowed) {
+      for (const target of worktreeTargets) {
+        try {
+          const { stdout: statusOut } = await execAsync("git status --porcelain", {
+            cwd: target.worktreeDir,
+          });
+          if (statusOut && statusOut.trim().length > 0) {
+            console.log(`[Dispatcher] 未コミットの変更・ドキュメントを検出 (${target.repoName})。自動コミットします...`);
+            await execAsync("git add -A", { cwd: target.worktreeDir });
+            const commitMsg = isInvestigation
+              ? `docs(${role}): record investigation and design artifacts for ${issue.issueKey}`
+              : `chore(${role}): auto commit repository artifacts for ${issue.issueKey}`;
+            await execAsync(`git commit -m "${commitMsg}"`, { cwd: target.worktreeDir });
+          }
+        } catch {
+          // コミット失敗時（差分なしやコンフリクト等）はスキップ
         }
-      } catch {
-        // コミット失敗時（差分なしやコンフリクト等）はスキップ
       }
     }
 
@@ -714,6 +768,15 @@ export class AgentDispatcher {
 
     // 6. Backlog コメント文面の構築
     const commentLines: string[] = [];
+
+    // 権限制御によるロールバックが発生した場合、コメント冒頭に注意喚起を明記
+    if (rollbackReasons.length > 0) {
+      commentLines.push(
+        `> ⚠️ **【権限制御 (PermissionGuard)】**: 読み取り専用ステップ中に不正なファイル変更を検知したため、安全にロールバック・破棄しました。`
+      );
+      rollbackReasons.forEach((r) => commentLines.push(`> - ${r}`));
+      commentLines.push(``);
+    }
 
     // PR リンク一覧の整形
     const prSectionLines: string[] = [];

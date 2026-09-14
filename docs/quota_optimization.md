@@ -1,5 +1,18 @@
 # クォータ消費最適化 & 軽量実行パイプライン仕様書
 
+## 📚 関連ドキュメント
+- 📝 **[チケット起票テンプレート](TICKET_TEMPLATE.md)** (要件漏れ防止・機能/非機能/DoDチェックリスト)
+- 🤖 **[プロジェクト規約テンプレート (AGENTS.md)](AGENTS_TEMPLATE.md)** (被開発リポジトリ用非機能要件・アーキテクチャ標準の正本テンプレート)
+- 🏛️ **[システムアーキテクチャ仕様書](architecture.md)** (全体構成・状態遷移・エージェント役割)
+- 🌐 **[Agentic SDLC 業界動向 & アーキテクチャ比較](agentic_sdlc_landscape.md)** (業界動向・命名定義・既存FW比較・Backlog=State設計の強み)
+- 🚀 **[環境構築 & 運用ガイド](setup_guide.md)** (必要要件・環境変数・systemd常駐化)
+- 🔀 **[並行開発 & Git Worktree 仕様書](concurrency_worktree.md)** (Worktree分離・並行数制御・Git排他制御)
+- ⚡ **[クォータ消費最適化 & 軽量パイプライン仕様書](quota_optimization.md)** (本ドキュメント)
+- 🛡️ **[トラブルシューティング & エスカレーション仕様書](troubleshooting.md)** (ループ防止・クォータ停止・プロセスロック)
+- 🎼 **[宣言的ワークフローエンジン & 権限制御設計書](declarative_workflow_engine_design.md)** (YAML定義・決定キーワード・edit:false多層防御)
+
+---
+
 ## 1. 概要と背景
 
 `aidevflow` は Backlog の課題を検知し、自律的に専門エージェントをディスパッチしてソフトウェア開発を進める仕組みです。
@@ -24,7 +37,7 @@ flowchart TD
     Issue["Backlog チケット検知"] --> Analysis{"タスク種別 & モード判定"}
 
     %% 調査タスク (2フェーズ)
-    Analysis -->|"調査・設計\n(種別: 調査 / 改行対応)"| InvPath["調査パイプライン (2フェーズ)"]
+    Analysis -->|"調査・設計\n(件名[research]/[調査] / 種別: 調査)"| InvPath["調査パイプライン (2フェーズ)"]
     InvPath --> Inv1["1. spec-writer (調査・仕様)\n[gemini-3.8-flash-high]"]
     Inv1 --> Inv2["2. spec-reviewer (調査レビュー)\n[gemini-3.8-flash-medium]"]
     Inv2 --> InvDone["調査完了 (ステータス: 処理済み/完了)"]

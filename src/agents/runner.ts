@@ -13,6 +13,7 @@ import type {
 } from "./types.js";
 import { buildAgentPrompt } from "./prompts.js";
 import { parseResetDuration } from "../daemon/quota-lock.js";
+import { parseDecision } from "../workflow/decision.js";
 
 /**
  * agy -p "/usage" --output-format json の出力をパースして構造化する
@@ -298,7 +299,8 @@ export class AgyRunner implements IAgentRunner {
           outputText = outputText.slice(0, 7000) + "\n\n...[長文のため以降省略]...";
         }
 
-        const isRejection = checkIsRejection(outputText);
+        const parsedDec = parseDecision(outputText, role);
+        const isRejection = parsedDec.keyword === "REJECTED";
 
         resolve({
           role,
@@ -308,6 +310,7 @@ export class AgyRunner implements IAgentRunner {
           output: outputText,
           usage: parsedUsage,
           durationSeconds: totalDurationSec,
+          decision: parsedDec,
         });
       });
 
@@ -489,13 +492,16 @@ export class ClaudeCliRunner implements IAgentRunner {
         if (code !== 0) {
           console.error(`[ClaudeCliRunner] Claude process exited with code ${code}`);
         }
-        const isRejection = checkIsRejection(stdout || stderr);
+        const fullOutput = stdout || stderr;
+        const parsedDec = parseDecision(fullOutput, role);
+        const isRejection = parsedDec.keyword === "REJECTED";
         resolve({
           role,
           success: code === 0,
           summary: `エージェント [${role}] が実行されました (終了コード: ${code})`,
           isRejection,
-          output: stdout || stderr,
+          output: fullOutput,
+          decision: parsedDec,
         });
       });
 
@@ -578,25 +584,27 @@ export class MockRunner implements IAgentRunner {
     await new Promise((resolve) => setTimeout(resolve, 1500));
 
     let output = "";
-    let isRejection = false;
 
     switch (role) {
       case "spec-writer":
-        output = `【詳細仕様書作成完了】\n- 対象: ${context.issueSummary}\n- 仕様・構成案を策定しました。\n次は spec-reviewer による詳細仕様レビューです。`;
+        output = `【詳細仕様書作成完了】\n- 対象: ${context.issueSummary}\n- 仕様・構成案を策定しました。\n次は spec-reviewer による詳細仕様レビューです。\n\n<!-- DECISION: PLANNED -->`;
         break;
       case "spec-reviewer":
-        output = `【詳細仕様レビュー完了】\n- 仕様・設計内容を確認し、問題ありませんでした（LGTM）。\n次は developer による実装です。`;
+        output = `【詳細仕様レビュー完了】\n- 仕様・設計内容を確認し、問題ありませんでした（LGTM）。\n次は developer による実装です。\n\n<!-- DECISION: APPROVED -->`;
         break;
       case "developer":
-        output = `【実装完了】\n- 設計書に基づいてコードとテストを実装しました。\n次は code-reviewer による技術レビューです。`;
+        output = `【実装完了】\n- 設計書に基づいてコードとテストを実装しました。\n次は code-reviewer による技術レビューです。\n\n<!-- DECISION: IMPLEMENTED -->`;
         break;
       case "code-reviewer":
-        output = `【技術レビュー完了】\n- 型安全性、テスト、規約、言語・ライブラリの最新性およびバージョン妥当性を確認しました（LGTM）。\n次は requirement-reviewer による要件レビューです。`;
+        output = `【技術レビュー完了】\n- 型安全性、テスト、規約、言語・ライブラリの最新性およびバージョン妥当性を確認しました（LGTM）。\n次は requirement-reviewer による要件レビューです。\n\n<!-- DECISION: APPROVED -->`;
         break;
       case "requirement-reviewer":
-        output = `【要件レビュー完了】\n- チケット要件との整合性を確認しました（LGTM）。全工程が完了しました。`;
+        output = `【要件レビュー完了】\n- チケット要件との整合性を確認しました（LGTM）。全工程が完了しました。\n\n<!-- DECISION: APPROVED -->`;
         break;
     }
+
+    const parsedDec = parseDecision(output, role);
+    const isRejection = parsedDec.keyword === "REJECTED";
 
     return {
       role,
@@ -604,6 +612,7 @@ export class MockRunner implements IAgentRunner {
       summary: `[Mock] エージェント ${role} の処理が完了しました`,
       isRejection,
       output,
+      decision: parsedDec,
     };
   }
 }

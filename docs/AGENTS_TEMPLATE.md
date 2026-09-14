@@ -1,5 +1,23 @@
 # AGENTS.md (Project Rules & Guidelines)
 
+<!-- 
+  【テンプレート利用時の注意】
+  本ファイルは開発対象リポジトリのルート直下に `AGENTS.md` として配置・編集して使用します。
+-->
+
+## 📚 関連ドキュメント (aidevflow)
+- 📝 **[チケット起票テンプレート](TICKET_TEMPLATE.md)** (要件漏れ防止・機能/非機能/DoDチェックリスト)
+- 🤖 **[プロジェクト規約テンプレート (AGENTS.md)](AGENTS_TEMPLATE.md)** (本ドキュメント)
+- 🏛️ **[システムアーキテクチャ仕様書](architecture.md)** (全体構成・状態遷移・エージェント役割)
+- 🌐 **[Agentic SDLC 業界動向 & アーキテクチャ比較](agentic_sdlc_landscape.md)** (業界動向・命名定義・既存FW比較・Backlog=State設計の強み)
+- 🚀 **[環境構築 & 運用ガイド](setup_guide.md)** (必要要件・環境変数・systemd常駐化)
+- 🔀 **[並行開発 & Git Worktree 仕様書](concurrency_worktree.md)** (Worktree分離・並行数制御・Git排他制御)
+- ⚡ **[クォータ消費最適化 & 軽量パイプライン仕様書](quota_optimization.md)** (Fast/Researchモード・モデル最適化)
+- 🛡️ **[トラブルシューティング & エスカレーション仕様書](troubleshooting.md)** (無限ループ防止・クォータ枯渇・エスカレーション)
+- 🎼 **[宣言的ワークフローエンジン & 権限制御設計書](declarative_workflow_engine_design.md)** (YAML定義・決定キーワード・edit:false多層防御)
+
+---
+
 本ドキュメントは、本リポジトリで作業するすべての AI エージェント（Google Antigravity CLI `agy`、Claude Code CLI `claude` 等）および人間の開発者が遵守すべき **プロジェクト固有の非機能要件・アーキテクチャ標準・コーディング規約** をまとめた正本です。
 作業開始時は必ず本ドキュメントを最優先で確認し、ここに記載された制約を満たす設計・実装を行ってください。
 

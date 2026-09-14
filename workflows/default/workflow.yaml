@@ -1,0 +1,82 @@
+name: default
+description: "5役多段SOP標準開発パイプライン"
+initial_step: spec-writer
+max_steps: 20
+
+steps:
+  spec-writer:
+    role: spec-writer
+    title: "詳細仕様策定"
+    backlog_tag: "[詳細設計中]"
+    custom_status: "詳細設計"
+    edit: true
+    rules:
+      - if: PLANNED
+        goto: spec-reviewer
+      - if: HUMAN_REQUIRED
+        goto: spec-writer
+        human_escalation: true
+      - goto: spec-reviewer
+
+  spec-reviewer:
+    role: spec-reviewer
+    title: "詳細仕様レビュー"
+    backlog_tag: "[設計レビュー中]"
+    custom_status: "設計レビュー"
+    edit: false
+    rules:
+      - if: APPROVED
+        goto: developer
+        human_gate: true
+      - if: REJECTED
+        goto: spec-writer
+      - if: HUMAN_REQUIRED
+        goto: spec-reviewer
+        human_escalation: true
+      - goto: developer
+
+  developer:
+    role: developer
+    title: "コード実装・テスト・PR作成"
+    backlog_tag: "[実装中]"
+    custom_status: "実装"
+    edit: true
+    rules:
+      - if: IMPLEMENTED
+        goto: code-reviewer
+      - if: HUMAN_REQUIRED
+        goto: developer
+        human_escalation: true
+      - goto: code-reviewer
+
+  code-reviewer:
+    role: code-reviewer
+    title: "技術観点レビュー"
+    backlog_tag: "[技術レビュー中]"
+    custom_status: "技術レビュー"
+    edit: false
+    rules:
+      - if: APPROVED
+        goto: requirement-reviewer
+      - if: REJECTED
+        goto: developer
+      - if: HUMAN_REQUIRED
+        goto: code-reviewer
+        human_escalation: true
+      - goto: requirement-reviewer
+
+  requirement-reviewer:
+    role: requirement-reviewer
+    title: "要件充足度レビュー"
+    backlog_tag: "[要件レビュー中]"
+    custom_status: "要件レビュー"
+    edit: false
+    rules:
+      - if: APPROVED
+        goto: COMPLETE
+      - if: REJECTED
+        goto: developer
+      - if: HUMAN_REQUIRED
+        goto: requirement-reviewer
+        human_escalation: true
+      - goto: COMPLETE

@@ -78,6 +78,27 @@ describe("エージェントプロンプト生成 (buildAgentPrompt)", () => {
       expect(prompt).toContain("【絶対遵守ルール】");
     }
   });
+
+  it("すべてのエージェントプロンプトに決定キーワード（<!-- DECISION: ... -->）の出力ルール指示が含まれていること", () => {
+    const roles = ["spec-writer", "spec-reviewer", "developer", "code-reviewer", "requirement-reviewer"] as const;
+    for (const r of roles) {
+      const prompt = buildAgentPrompt(r, dummyContext);
+      expect(prompt).toContain("【決定キーワードの出力ルール（必須）】");
+      expect(prompt).toContain("<!-- DECISION:");
+      expect(prompt).toContain("<!-- DECISION: HUMAN_REQUIRED -->");
+    }
+
+    // 各ロール特有のトークンが含まれていること
+    const specWriterPrompt = buildAgentPrompt("spec-writer", dummyContext);
+    expect(specWriterPrompt).toContain("<!-- DECISION: PLANNED -->");
+
+    const developerPrompt = buildAgentPrompt("developer", dummyContext);
+    expect(developerPrompt).toContain("<!-- DECISION: IMPLEMENTED -->");
+
+    const reviewerPrompt = buildAgentPrompt("code-reviewer", dummyContext);
+    expect(reviewerPrompt).toContain("<!-- DECISION: APPROVED -->");
+    expect(reviewerPrompt).toContain("<!-- DECISION: REJECTED -->");
+  });
 });
 
 describe("コメント履歴圧縮 (compressRecentComments)", () => {

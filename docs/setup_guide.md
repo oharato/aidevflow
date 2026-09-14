@@ -1,5 +1,18 @@
 # aidevflow 環境構築 & 運用ガイド
 
+## 📚 関連ドキュメント
+- 📝 **[チケット起票テンプレート](TICKET_TEMPLATE.md)** (要件漏れ防止・機能/非機能/DoDチェックリスト)
+- 🤖 **[プロジェクト規約テンプレート (AGENTS.md)](AGENTS_TEMPLATE.md)** (被開発リポジトリ用非機能要件・アーキテクチャ標準の正本テンプレート)
+- 🏛️ **[システムアーキテクチャ仕様書](architecture.md)** (全体構成・状態遷移・エージェント役割)
+- 🌐 **[Agentic SDLC 業界動向 & アーキテクチャ比較](agentic_sdlc_landscape.md)** (業界動向・命名定義・既存FW比較・Backlog=State設計の強み)
+- 🚀 **[環境構築 & 運用ガイド](setup_guide.md)** (本ドキュメント)
+- 🔀 **[並行開発 & Git Worktree 仕様書](concurrency_worktree.md)** (Worktree分離・並行数制御・Git排他制御)
+- ⚡ **[クォータ消費最適化 & 軽量パイプライン仕様書](quota_optimization.md)** (Fast/Researchモード・モデル最適化)
+- 🛡️ **[トラブルシューティング & エスカレーション仕様書](troubleshooting.md)** (無限ループ防止・クォータ枯渇・エスカレーション)
+- 🎼 **[宣言的ワークフローエンジン & 権限制御設計書](declarative_workflow_engine_design.md)** (YAML定義・決定キーワード・edit:false多層防御)
+
+---
+
 本ドキュメントでは、`aidevflow` の導入要件、環境変数の詳細設定、Backlog への状態登録、および systemd による常駐化手順について解説します。
 
 ---
@@ -54,6 +67,7 @@ cp .env.example .env
 | `QUOTA_AUTO_RESUME` | - | `true` | クォータ回復時の中断チケット自動再開 (`true`/`false`) |
 | `REQUIRE_HUMAN_SPEC_APPROVAL`| - | `false` | 設計レビュー完了時に `[設計承認待ち]`（未対応）で停止し人間承認を必須化 (`true`/`false`) |
 | `CLEANUP_INTERVAL_MINUTES`| - | `30` | 完了チケット & クローズ済みPRのリソース定期クリーンアップ間隔（分） |
+| `AIDEVFLOW_WORKFLOWS_DIR` | - | `workflows` | 宣言的ワークフロー定義 YAML / プロンプトの配置ベースディレクトリ |
 
 ---
 

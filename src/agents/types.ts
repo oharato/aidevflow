@@ -1,3 +1,5 @@
+import type { ParsedDecision } from "../workflow/types.js";
+
 export type AgentRole = "spec-writer" | "spec-reviewer" | "developer" | "code-reviewer" | "requirement-reviewer";
 
 export interface AgentContext {
@@ -8,6 +10,7 @@ export interface AgentContext {
   workDir: string;
   isInvestigation?: boolean;
   isFastMode?: boolean;
+  readOnly?: boolean;
 }
 
 export interface AgentTokenUsage {
@@ -56,6 +59,7 @@ export interface AgentResult {
   usage?: AgentTokenUsage;
   durationSeconds?: number;
   quotaUsage?: QuotaUsageInfo;
+  decision?: ParsedDecision;
 }
 
 export interface QuotaProbeResult {

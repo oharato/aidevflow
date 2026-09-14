@@ -1,0 +1,35 @@
+name: research
+description: "調査・検討・設計パイプライン (spec -> review)"
+initial_step: spec-writer
+max_steps: 10
+
+steps:
+  spec-writer:
+    role: spec-writer
+    title: "技術調査・仕様策定"
+    backlog_tag: "[調査中]"
+    custom_status: "詳細設計"
+    edit: true
+    rules:
+      - if: PLANNED
+        goto: spec-reviewer
+      - if: HUMAN_REQUIRED
+        goto: spec-writer
+        human_escalation: true
+      - goto: spec-reviewer
+
+  spec-reviewer:
+    role: spec-reviewer
+    title: "調査・仕様レビュー"
+    backlog_tag: "[調査レビュー中]"
+    custom_status: "設計レビュー"
+    edit: false
+    rules:
+      - if: APPROVED
+        goto: COMPLETE
+      - if: REJECTED
+        goto: spec-writer
+      - if: HUMAN_REQUIRED
+        goto: spec-reviewer
+        human_escalation: true
+      - goto: COMPLETE

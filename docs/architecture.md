@@ -9,6 +9,7 @@
 - 🔀 **[並行開発 & Git Worktree 仕様書](concurrency_worktree.md)** (Worktree分離・並行数制御・Git排他制御)
 - ⚡ **[クォータ消費最適化 & 軽量パイプライン仕様書](quota_optimization.md)** (Fastモード・モデル最適化)
 - 🛡️ **[トラブルシューティング & エスカレーション仕様書](troubleshooting.md)** (ループ防止・クォータ停止・プロセスロック)
+- 🎼 **[宣言的ワークフローエンジン & 権限制御設計書](declarative_workflow_engine_design.md)** (YAML定義・決定キーワード・edit:false多層防御)
 
 ---
 
@@ -52,6 +53,8 @@ flowchart TD
     subgraph Daemon["aidevflow TypeScript Daemon"]
         Poller["BacklogPoller\n(プロジェクト定期監視 / 状態検知)"]
         Dispatcher["AgentDispatcher\n(ステータス判定 & 振り分け)"]
+        WorkflowEng["WorkflowEngine & Loader\n(YAML宣言的定義 & 決定キーワード)"]
+        PermGuard["PermissionGuard\n(edit:false 権限制御 & 多層防御)"]
         RepoParser["extractRepositoryPaths\n(チケット詳細から複数リポジトリ抽出)"]
         WorktreeMgr["GitWorktreeManager\n(複数リポジトリの clone & worktree 準備)"]
         GHService["GitHubService\n(複数リポジトリへの push & PR 作成)"]
@@ -79,6 +82,8 @@ flowchart TD
 
     ProjectIssues -->|"定期取得"| Poller
     Poller -->|"状態変更検知"| Dispatcher
+    Dispatcher -->|"ワークフロー解決 & 次ステップ評価"| WorkflowEng
+    Dispatcher -->|"権限制御 & ロールバック"| PermGuard
     Dispatcher --> RepoParser
     RepoParser --> WorktreeMgr
     WorktreeMgr -->|"git clone / fetch"| Repos
@@ -490,7 +495,7 @@ LLM（Claude や Gemini 等）の実際の呼び出しを行わず、各専門�
 ## 13. 技術スタック & 設計思想
 
 - **ランタイム**: Node.js LTS (v24.x)
-  - 組み込みの `process.loadEnvFile()` を採用。外部 `dotenv` パッケージを排除し、本番依存ゼロ（`dependencies: {}`）を達成。
+  - 組み込みの `process.loadEnvFile()` を採用。ワークフロー定義の解析には安定版 `yaml`（v2.8.x）を使用。
 - **言語**: TypeScript (v7.x)
   - モダンな `strict: true`、Node.js 組み込み型定義（`@types/node`）による堅牢な型安全性を確保。
 - **パッケージマネージャー**: `pnpm` (v11.x)
