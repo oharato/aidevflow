@@ -61,6 +61,11 @@ export interface AgentResult {
   durationSeconds?: number;
   quotaUsage?: QuotaUsageInfo;
   decision?: ParsedDecision;
+  /**
+   * デーモン停止シグナル (SIGINT/SIGTERM) によってエージェント子プロセスが中断された場合 true。
+   * この場合は「異常終了」として確認待ちにエスカレーションせず、チケットは無変更のまま次回起動時に再開する。
+   */
+  interrupted?: boolean;
 }
 
 export interface QuotaProbeResult {

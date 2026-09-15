@@ -1,11 +1,9 @@
-import { exec } from "child_process";
-import { promisify } from "util";
 import fs from "fs";
 import path from "path";
 import os from "os";
 import { KeyedAsyncMutex } from "./mutex.js";
-
-const execAsync = promisify(exec);
+import { runCommand, isSafeRefName } from "./exec.js";
+import { isSafeRepoLocator } from "./repo-parser.js";
 
 export interface WorktreeInfo {
   worktreePath: string;
@@ -56,10 +54,32 @@ export class GitWorktreeManager {
   }
 
   /**
+   * チケット本文由来のリポジトリ指定子とチケットキーを、git コマンドに渡す前に検証する
+   */
+  private assertSafeInputs(repoUrlOrPath: string, issueKey?: string): void {
+    if (!isSafeRepoLocator(repoUrlOrPath) && !path.isAbsolute(repoUrlOrPath)) {
+      throw new Error(
+        `安全でないリポジトリ指定子のため拒否しました: "${repoUrlOrPath}"（URL または英数字・./-_ のみのパスを指定してください）`
+      );
+    }
+    if (path.isAbsolute(repoUrlOrPath) && /[\s$`;&|<>(){}*?!'"\\\x00-\x1f]/.test(repoUrlOrPath)) {
+      throw new Error(`安全でないリポジトリパスのため拒否しました: "${repoUrlOrPath}"`);
+    }
+    if (issueKey !== undefined && !isSafeRefName(issueKey)) {
+      throw new Error(`安全でないチケットキー（ブランチ名）のため拒否しました: "${issueKey}"`);
+    }
+    const repoName = this.extractRepoName(repoUrlOrPath);
+    if (!isSafeRefName(repoName)) {
+      throw new Error(`安全でないリポジトリ名のため拒否しました: "${repoName}"`);
+    }
+  }
+
+  /**
    * リポジトリを ~/aidevflow/repos/<repoName> に準備 (clone または fetch) する
    * (非同期 Mutex により同一リポジトリへの同時操作を排他制御)
    */
   async ensureRepository(repoUrlOrPath: string): Promise<string> {
+    this.assertSafeInputs(repoUrlOrPath);
     const repoName = this.extractRepoName(repoUrlOrPath);
     return this.repoMutex.runExclusive(repoName, async () => {
       return this.ensureRepositoryInternal(repoUrlOrPath, repoName);
@@ -76,9 +96,9 @@ export class GitWorktreeManager {
     // すでに clone 済みの場合は状態確認と fetch
     if (fs.existsSync(targetRepoPath)) {
       try {
-        await execAsync("git rev-parse --is-inside-work-tree", { cwd: targetRepoPath });
+        await runCommand("git", ["rev-parse", "--is-inside-work-tree"], { cwd: targetRepoPath });
         console.log(`[GitWorktree] 既存のクローンリポジトリを確認: ${targetRepoPath}`);
-        await execAsync("git fetch --all --prune", { cwd: targetRepoPath }).catch(() => {});
+        await runCommand("git", ["fetch", "--all", "--prune"], { cwd: targetRepoPath }).catch(() => {});
         return targetRepoPath;
       } catch {
         console.warn(`[GitWorktree] ${targetRepoPath} は破損しているため再クローンします。`);
@@ -86,9 +106,9 @@ export class GitWorktreeManager {
       }
     }
 
-    // 新規 clone
+    // 新規 clone（"--" で引数をオプションとして解釈させない）
     console.log(`[GitWorktree] リポジトリを clone 中: "${repoUrlOrPath}" -> "${targetRepoPath}"`);
-    await execAsync(`git clone "${repoUrlOrPath}" "${targetRepoPath}"`);
+    await runCommand("git", ["clone", "--", repoUrlOrPath, targetRepoPath]);
     console.log(`[GitWorktree] clone 完了: ${targetRepoPath}`);
 
     return targetRepoPath;
@@ -101,6 +121,7 @@ export class GitWorktreeManager {
    * (非同期 Mutex により、同一親リポジトリへの同時 worktree 操作を安全に直列化)
    */
   async ensureWorktree(repoUrlOrPath: string, issueKey: string): Promise<string> {
+    this.assertSafeInputs(repoUrlOrPath, issueKey);
     const repoName = this.extractRepoName(repoUrlOrPath);
 
     return this.repoMutex.runExclusive(repoName, async () => {
@@ -123,16 +144,18 @@ export class GitWorktreeManager {
 
       if (existing) {
         console.log(`[GitWorktree] 既存の worktree を再利用します: ${worktreeDir} (ブランチ: ${existing.branch})`);
-        try {
-          await execAsync(`git pull origin "${existing.branch}"`, { cwd: worktreeDir });
-        } catch {
-          // リモート未プッシュ時やネットワークエラー時はスキップ
+        if (isSafeRefName(existing.branch)) {
+          try {
+            await runCommand("git", ["pull", "origin", existing.branch], { cwd: worktreeDir });
+          } catch {
+            // リモート未プッシュ時やネットワークエラー時はスキップ
+          }
         }
         return worktreeDir;
       }
 
       // ゴーストディレクトリの整理
-      await execAsync("git worktree prune", { cwd: repoPath }).catch(() => {});
+      await runCommand("git", ["worktree", "prune"], { cwd: repoPath }).catch(() => {});
 
       if (fs.existsSync(worktreeDir)) {
         fs.rmSync(worktreeDir, { recursive: true, force: true });
@@ -143,13 +166,9 @@ export class GitWorktreeManager {
       console.log(`[GitWorktree] 新規 worktree を作成中: パス=${worktreeDir}, ブランチ=${branchName} (新規ブランチ: ${!branchExists})`);
 
       if (branchExists) {
-        await execAsync(`git worktree add "${worktreeDir}" "${branchName}"`, {
-          cwd: repoPath,
-        });
+        await runCommand("git", ["worktree", "add", worktreeDir, branchName], { cwd: repoPath });
       } else {
-        await execAsync(`git worktree add -b "${branchName}" "${worktreeDir}"`, {
-          cwd: repoPath,
-        });
+        await runCommand("git", ["worktree", "add", "-b", branchName, worktreeDir], { cwd: repoPath });
       }
 
       console.log(`[GitWorktree] worktree 作成成功: ${worktreeDir}`);
@@ -182,7 +201,7 @@ export class GitWorktreeManager {
 
   private async listWorktrees(repoPath: string): Promise<WorktreeInfo[]> {
     try {
-      const { stdout } = await execAsync("git worktree list --porcelain", { cwd: repoPath });
+      const { stdout } = await runCommand("git", ["worktree", "list", "--porcelain"], { cwd: repoPath });
       const lines = stdout.split("\n");
       const worktrees: WorktreeInfo[] = [];
 
@@ -214,7 +233,7 @@ export class GitWorktreeManager {
 
   private async checkBranchExists(repoPath: string, branchName: string): Promise<boolean> {
     try {
-      const { stdout } = await execAsync(`git branch --list "${branchName}"`, { cwd: repoPath });
+      const { stdout } = await runCommand("git", ["branch", "--list", branchName], { cwd: repoPath });
       return stdout.trim().length > 0;
     } catch {
       return false;
@@ -266,6 +285,10 @@ export class GitWorktreeManager {
    * 特定チケットの全 worktree を安全に削除し、親リポジトリを prune してディレクトリを解放する
    */
   async removeIssueWorktrees(issueKey: string): Promise<void> {
+    if (!isSafeRefName(issueKey)) {
+      console.warn(`[GitWorktree] 安全でないチケットキーのため削除をスキップ: "${issueKey}"`);
+      return;
+    }
     const targets = this.getIssueWorktreeDirs(issueKey);
     const issueBaseDir = path.join(this.worktreesDir, issueKey);
 
@@ -274,8 +297,8 @@ export class GitWorktreeManager {
         await this.repoMutex.runExclusive(target.repoName, async () => {
           try {
             console.log(`[GitWorktree] worktree を削除中: ${target.worktreeDir}`);
-            await execAsync(`git worktree remove --force "${target.worktreeDir}"`, { cwd: target.repoPath }).catch(() => {});
-            await execAsync(`git worktree prune`, { cwd: target.repoPath }).catch(() => {});
+            await runCommand("git", ["worktree", "remove", "--force", target.worktreeDir], { cwd: target.repoPath }).catch(() => {});
+            await runCommand("git", ["worktree", "prune"], { cwd: target.repoPath }).catch(() => {});
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
             console.warn(`[GitWorktree] worktree 削除警告 (${target.repoName}):`, msg);
@@ -295,9 +318,11 @@ export class GitWorktreeManager {
         const parentDir = path.dirname(issueBaseDir);
         const baseName = path.basename(issueBaseDir);
         try {
-          await execAsync(
-            `docker run --rm -v "${parentDir}:/cleanup_root" alpine rm -rf "/cleanup_root/${baseName}"`
-          );
+          await runCommand("docker", [
+            "run", "--rm",
+            "-v", `${parentDir}:/cleanup_root`,
+            "alpine", "rm", "-rf", `/cleanup_root/${baseName}`,
+          ]);
           console.log(`[GitWorktree] Docker経由でチケットディレクトリを完全削除: ${issueBaseDir}`);
         } catch {
           console.warn(`[GitWorktree] ディレクトリ削除警告 (${issueBaseDir}):`, errMsg);

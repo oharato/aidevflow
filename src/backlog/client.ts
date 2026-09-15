@@ -100,6 +100,9 @@ export class BacklogClient {
     if (params.count) {
       query.append("count", String(params.count));
     }
+    if (params.offset) {
+      query.append("offset", String(params.offset));
+    }
     if (params.sort) {
       query.append("sort", params.sort);
     }

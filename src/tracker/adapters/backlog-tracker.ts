@@ -1,5 +1,5 @@
 import type { BacklogClient } from "../../backlog/client.js";
-import type { BacklogIssue, BacklogStatus } from "../../backlog/types.js";
+import type { BacklogIssue, BacklogStatus, GetIssuesParams } from "../../backlog/types.js";
 import { sanitizeBacklogText } from "../../backlog/client.js";
 import {
   hasCustomStatuses,
@@ -129,12 +129,15 @@ export class BacklogTracker implements IIssueTracker {
       myId = (await this.resolveMyself()).id;
     }
 
-    const rawIssues = await this.client.getIssues({
+    // クローズ済み（完了）ステータスは監視対象外なので API 側で除外し、取得件数を抑える
+    const openStatusIds = this.projectStatuses
+      .filter((st) => !this.isClosedStatusName(st.name))
+      .map((st) => st.id);
+
+    const rawIssues = await this.fetchAllOpenIssues({
       projectId: [this.projectId!],
       ...(myId !== null ? { assigneeId: [myId] } : {}),
-      sort: "updated",
-      order: "asc",
-      count: 50,
+      ...(openStatusIds.length > 0 ? { statusId: openStatusIds } : {}),
     });
 
     const candidates: TrackedIssue[] = [];
@@ -145,19 +148,7 @@ export class BacklogTracker implements IIssueTracker {
         continue;
       }
 
-      // 1. 種別フィルタ
-      if (filter?.targetIssueType && raw.issueType?.name !== filter.targetIssueType) {
-        continue;
-      }
-
-      // 2. カテゴリーフィルタ
-      if (filter?.targetCategory) {
-        const hasCat = raw.category?.some((c) => c.name === filter.targetCategory);
-        if (!hasCat) continue;
-      }
-
-      // 3. [AI] タグ必須フィルタ
-      if (filter?.requireAiTag && !/\[AI\]/i.test(raw.summary)) {
+      if (!this.matchesStaticFilter(raw, filter)) {
         continue;
       }
 
@@ -165,6 +156,90 @@ export class BacklogTracker implements IIssueTracker {
     }
 
     return candidates;
+  }
+
+  /**
+   * 更新日時の新しい順にページングして全件取得する。
+   * 旧実装は「更新が古い順に 50 件固定」だったため、課題が 50 件を超えるプロジェクトでは
+   * 直近に「処理中」へ変更されたチケットが取得窓の外に出て永遠に検知されなかった。
+   */
+  private async fetchAllOpenIssues(
+    baseParams: Pick<GetIssuesParams, "projectId" | "assigneeId" | "statusId">
+  ): Promise<BacklogIssue[]> {
+    const pageSize = 100;
+    const maxPages = 5;
+    const seen = new Set<number>();
+    const all: BacklogIssue[] = [];
+
+    for (let page = 0; page < maxPages; page++) {
+      const batch = await this.client.getIssues({
+        ...baseParams,
+        sort: "updated",
+        order: "desc",
+        count: pageSize,
+        offset: page * pageSize,
+      });
+      let added = 0;
+      for (const raw of batch) {
+        if (seen.has(raw.id)) continue;
+        seen.add(raw.id);
+        all.push(raw);
+        added++;
+      }
+      // 最終ページ、または（モック等で）同じ内容が返り続ける場合は終了
+      if (batch.length < pageSize || added === 0) break;
+    }
+
+    return all;
+  }
+
+  /**
+   * 種別・カテゴリー・[AI] タグの静的フィルタ判定
+   */
+  private matchesStaticFilter(raw: BacklogIssue, filter?: IssueFilterOptions): boolean {
+    if (filter?.targetIssueType && raw.issueType?.name !== filter.targetIssueType) {
+      return false;
+    }
+    if (filter?.targetCategory) {
+      const hasCat = raw.category?.some((c) => c.name === filter.targetCategory);
+      if (!hasCat) return false;
+    }
+    if (filter?.requireAiTag && !/\[AI\]/i.test(raw.summary)) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * 単一チケットがフィルタ条件を満たすか（BACKLOG_ISSUE_KEY 単一監視モード用）
+   */
+  async isIssueEligible(issue: TrackedIssue, filter?: IssueFilterOptions): Promise<boolean> {
+    if (!filter) return true;
+    if (filter.onlyAssignedToMe) {
+      const me = await this.resolveMyself();
+      if (issue.assigneeId !== me.id) return false;
+    }
+    if (filter.targetIssueType && issue.issueType !== filter.targetIssueType) return false;
+    if (filter.targetCategory && !issue.categories?.includes(filter.targetCategory)) return false;
+    if (filter.requireAiTag && !/\[AI\]/i.test(issue.rawTitle)) return false;
+    return true;
+  }
+
+  /**
+   * 「完了」「Closed」等、人間がクローズ済みとみなすステータス名か判定する
+   * （「処理済み」= AI 全工程完了・人間レビュー待ち はクローズではない）
+   */
+  isClosedStatusName(statusName: string): boolean {
+    const norm = (statusName || "").trim().toLowerCase();
+    if (!norm) return false;
+    if (norm.includes("処理済")) return false;
+    return (
+      norm === "完了" ||
+      norm === "closed" ||
+      norm === "complete" ||
+      norm === "completed" ||
+      norm.endsWith("完了")
+    );
   }
 
   /**
@@ -268,8 +343,11 @@ export class BacklogTracker implements IIssueTracker {
 
     switch (state) {
       case "waiting_confirmation": {
-        if (this.isCustomMode) {
-          targetStatusId = this.findStatusIdByName("確認待ち");
+        // カスタム状態モードでも「確認待ち」が未登録なら、件名タグ + 未対応 にフォールバックして
+        // 必ず「進行中でない」終端状態に落とす（コメントだけ投稿して処理中のまま残すとループする）
+        const confirmId = this.isCustomMode ? this.findStatusIdByName("確認待ち") : null;
+        if (confirmId) {
+          targetStatusId = confirmId;
         } else {
           targetSummary = targetSummary || formatSummaryWithPhase(cleanTitle, PHASE_TAGS.confirmHuman);
           targetStatusId = this.findStatusIdByName("未対応") || 1;
@@ -277,10 +355,11 @@ export class BacklogTracker implements IIssueTracker {
         break;
       }
       case "waiting_approval": {
-        if (this.isCustomMode) {
-          targetStatusId = this.findStatusIdByName("確認待ち");
+        const confirmId = this.isCustomMode ? this.findStatusIdByName("確認待ち") : null;
+        if (confirmId) {
+          targetStatusId = confirmId;
         } else {
-          // 人間の設計承認待ち (プレフィックスモード)
+          // 人間の設計承認待ち (プレフィックスモード / 確認待ち未登録時のフォールバック)
           targetSummary = targetSummary || formatSummaryWithPhase(cleanTitle, PHASE_TAGS.specApprovalWait);
           targetStatusId = this.findStatusIdByName("未対応") || 1;
         }
@@ -296,6 +375,10 @@ export class BacklogTracker implements IIssueTracker {
           targetSummary = targetSummary || formatSummaryWithPhase(cleanTitle, completedTag);
           targetStatusId = this.findStatusIdByName("処理済み") || 3;
         }
+        break;
+      }
+      case "closed": {
+        targetStatusId = this.findStatusIdByName("完了") || 4;
         break;
       }
       case "in_progress": {
@@ -374,20 +457,11 @@ export class BacklogTracker implements IIssueTracker {
       count: 100,
     });
 
+    // クリーンアップ対象は人間がクローズした「完了」ステータスのみ
+    // （「処理済み」や [要件レビュー完了] タグは人間の PR レビュー待ちなので対象外）
     const completed: TrackedIssue[] = [];
     for (const raw of rawIssues) {
-      const norm = (raw.status?.name || "").trim().toLowerCase();
-      const isCompleted =
-        norm === "完了" ||
-        norm === "closed" ||
-        norm === "complete" ||
-        norm === "completed" ||
-        norm.endsWith("完了") ||
-        raw.summary.includes("[完了]") ||
-        raw.summary.includes("[要件レビュー完了]") ||
-        raw.summary.includes("[調査完了]");
-
-      if (isCompleted) {
+      if (this.isClosedStatusName(raw.status?.name || "")) {
         completed.push(this.toTrackedIssue(raw));
       }
     }
@@ -508,6 +582,10 @@ export class BacklogTracker implements IIssueTracker {
           stepDef,
           lifecycleState: "in_progress",
         };
+      }
+      // 「完了」(人間がクローズ) と「処理済み」(AI 完了・人間レビュー待ち) を区別する
+      if (this.isClosedStatusName(statusName)) {
+        return { lifecycleState: "closed" };
       }
       return { lifecycleState: "completed" };
     }

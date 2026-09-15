@@ -17,6 +17,9 @@ export type EventType =
   | "quota_locked"
   | "quota_recovered"
   | "cleanup_completed"
+  | "agent_interrupted"
+  | "workflow_evaluated"
+  | "issue_failed"
   | "error";
 
 export interface LogEvent {

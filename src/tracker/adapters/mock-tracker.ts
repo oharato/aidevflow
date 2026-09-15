@@ -29,6 +29,10 @@ export class MockIssueTracker implements IIssueTracker {
     return { ...this.currentUser };
   }
 
+  async isIssueEligible(issue: TrackedIssue, filter?: IssueFilterOptions): Promise<boolean> {
+    return this.matchesFilter(issue, filter);
+  }
+
   private matchesFilter(issue: TrackedIssue, filter?: IssueFilterOptions): boolean {
     if (filter?.onlyAssignedToMe && issue.assigneeId !== this.currentUser.id) {
       return false;
@@ -165,6 +169,9 @@ export class MockIssueTracker implements IIssueTracker {
         issue.rawStatusName = "処理済み";
         issue.rawTitle = options.newSummary || `[要件レビュー完了] ${issue.title}`;
         break;
+      case "closed":
+        issue.rawStatusName = "完了";
+        break;
       case "in_progress":
         issue.rawStatusName = "処理中";
         break;
@@ -197,7 +204,7 @@ export class MockIssueTracker implements IIssueTracker {
 
   async fetchCompletedIssues(): Promise<TrackedIssue[]> {
     return Array.from(this.issues.values()).filter(
-      (i) => i.lifecycleState === "completed"
+      (i) => i.lifecycleState === "closed"
     );
   }
 

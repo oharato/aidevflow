@@ -131,10 +131,20 @@ describe("MockIssueTracker", () => {
     });
     issue = await tracker.getIssue("TEST-1");
     expect(issue.lifecycleState).toBe("completed");
+    expect(issue.rawStatusName).toBe("処理済み");
 
-    const completed = await tracker.fetchCompletedIssues();
-    expect(completed.length).toBe(1);
-    expect(completed[0].key).toBe("TEST-1");
+    // 「処理済み」(AI 完了・人間レビュー待ち) はクリーンアップ対象ではない
+    expect((await tracker.fetchCompletedIssues()).length).toBe(0);
+
+    // 人間がクローズ (完了) して初めてクリーンアップ対象になる
+    await tracker.updateLifecycle("TEST-1", "closed");
+    issue = await tracker.getIssue("TEST-1");
+    expect(issue.lifecycleState).toBe("closed");
+    expect(issue.rawStatusName).toBe("完了");
+
+    const closed = await tracker.fetchCompletedIssues();
+    expect(closed.length).toBe(1);
+    expect(closed[0].key).toBe("TEST-1");
   });
 
   it("ユーザー定義のカスタムステップでも動的に機能すること", async () => {

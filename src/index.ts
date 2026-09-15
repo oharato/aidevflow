@@ -59,7 +59,7 @@ async function main() {
   if (config.agentRunner === "mock") {
     runner = new MockRunner();
   } else if (config.agentRunner === "claude") {
-    runner = new ClaudeCliRunner(config.agentWorkDir);
+    runner = new ClaudeCliRunner(config.agentWorkDir, config.agentTimeout, config.claudeModel);
   } else {
     runner = new AgyRunner(
       config.agentWorkDir,
@@ -124,18 +124,34 @@ async function main() {
     config.quotaAutoResume
   );
 
-  const handleShutdown = async () => {
-    console.log("\nシャットダウン要求を受信しました。終了処理を実行します...");
-    await poller.stop();
-    lock.release();
+  // ロックは実行中タスクの完了を待ってから解放する（シグナル直後に消すと二重起動の窓が開く）
+  let shuttingDown = false;
+  const handleShutdown = async (signal: string) => {
+    if (shuttingDown) {
+      console.log(`\n[Shutdown] 既に終了処理中です (${signal})。実行中タスクの完了を待っています...`);
+      return;
+    }
+    shuttingDown = true;
+    console.log(`\nシャットダウン要求 (${signal}) を受信しました。実行中タスクの完了を待って終了します...`);
+    try {
+      await poller.stop();
+    } finally {
+      lock.release();
+    }
     process.exit(0);
   };
 
   process.on("SIGINT", () => {
-    handleShutdown().catch(() => process.exit(1));
+    handleShutdown("SIGINT").catch(() => {
+      lock.release();
+      process.exit(1);
+    });
   });
   process.on("SIGTERM", () => {
-    handleShutdown().catch(() => process.exit(1));
+    handleShutdown("SIGTERM").catch(() => {
+      lock.release();
+      process.exit(1);
+    });
   });
 
   await poller.start();

@@ -205,6 +205,126 @@ describe("BacklogTracker", () => {
     });
   });
 
+  describe("課題取得の網羅性 (更新日時降順・ページング・完了除外)", () => {
+    beforeEach(async () => {
+      await tracker.init();
+    });
+
+    it("更新が新しい順 (desc) で取得し、クローズ済み「完了」ステータスを API 側で除外すること", async () => {
+      mockClient.getIssues.mockResolvedValue([]);
+      await tracker.fetchCandidateIssues(BUILTIN_DEFAULT_WORKFLOW);
+
+      const params = mockClient.getIssues.mock.calls[0][0];
+      expect(params.sort).toBe("updated");
+      expect(params.order).toBe("desc");
+      expect(params.count).toBe(100);
+      expect(params.statusId).toEqual([1, 2, 3]); // 完了 (4) を除外、処理済み (3) は含む
+    });
+
+    it("100 件を超える場合は offset でページングし、全件を重複なく返すこと", async () => {
+      const make = (n: number): BacklogIssue => ({
+        id: n,
+        projectId: 10,
+        issueKey: `STUDY-${n}`,
+        keyId: n,
+        issueType: { id: 1, name: "タスク" },
+        summary: `タスク ${n}`,
+        description: "",
+        status: { id: 1, projectId: 10, name: "未対応", color: "#ed8077", displayOrder: 1 },
+        createdUser: { id: 1, name: "User" },
+        created: "2026-09-15T00:00:00Z",
+        updated: "2026-09-15T00:00:00Z",
+      });
+      const page1 = Array.from({ length: 100 }, (_, i) => make(i + 1));
+      const page2 = Array.from({ length: 30 }, (_, i) => make(i + 101));
+      mockClient.getIssues.mockImplementation(async (p: { offset?: number }) =>
+        (p.offset || 0) === 0 ? page1 : page2
+      );
+
+      const candidates = await tracker.fetchCandidateIssues(BUILTIN_DEFAULT_WORKFLOW);
+      expect(candidates.length).toBe(130);
+      expect(mockClient.getIssues).toHaveBeenCalledTimes(2);
+      expect(mockClient.getIssues.mock.calls[1][0].offset).toBe(100);
+    });
+  });
+
+  describe("ライフサイクル: 処理済み (completed) と 完了 (closed) の区別", () => {
+    const base: Omit<BacklogIssue, "status" | "summary"> = {
+      id: 1,
+      projectId: 10,
+      issueKey: "STUDY-1",
+      keyId: 1,
+      issueType: { id: 1, name: "タスク" },
+      description: "",
+      createdUser: { id: 1, name: "User" },
+      created: "2026-09-15T00:00:00Z",
+      updated: "2026-09-15T00:00:00Z",
+    };
+
+    beforeEach(async () => {
+      await tracker.init();
+    });
+
+    it("「処理済み」+ [要件レビュー完了] は completed (人間の PR レビュー待ち) になること", async () => {
+      mockClient.getIssue.mockResolvedValue({
+        ...base,
+        summary: "[要件レビュー完了] タスク",
+        status: standardStatuses[2],
+      });
+      const issue = await tracker.getIssue("STUDY-1", BUILTIN_DEFAULT_WORKFLOW);
+      expect(issue.lifecycleState).toBe("completed");
+    });
+
+    it("「完了」は closed (人間がクローズ済み) になること", async () => {
+      mockClient.getIssue.mockResolvedValue({
+        ...base,
+        summary: "[要件レビュー完了] タスク",
+        status: standardStatuses[3],
+      });
+      const issue = await tracker.getIssue("STUDY-1", BUILTIN_DEFAULT_WORKFLOW);
+      expect(issue.lifecycleState).toBe("closed");
+    });
+
+    it("fetchCompletedIssues は「完了」のみ返し、「処理済み」を含めないこと", async () => {
+      mockClient.getIssues.mockResolvedValue([
+        { ...base, id: 1, issueKey: "STUDY-1", summary: "[要件レビュー完了] a", status: standardStatuses[2] },
+        { ...base, id: 2, issueKey: "STUDY-2", summary: "b", status: standardStatuses[3] },
+      ]);
+      const done = await tracker.fetchCompletedIssues();
+      expect(done.map((i) => i.key)).toEqual(["STUDY-2"]);
+    });
+  });
+
+  describe("カスタム状態モードで「確認待ち」が未登録の場合", () => {
+    it("コメントのみで終わらず、件名 [確認待ち] + 未対応 にフォールバックして停止させること", async () => {
+      const partialCustom: BacklogStatus[] = [
+        { id: 1, projectId: 10, name: "未対応", color: "#ed8077", displayOrder: 1 },
+        { id: 101, projectId: 10, name: "詳細設計中", color: "#2c9fa0", displayOrder: 2 },
+        { id: 103, projectId: 10, name: "実装中", color: "#4488c5", displayOrder: 3 },
+        { id: 4, projectId: 10, name: "完了", color: "#b0be3c", displayOrder: 4 },
+      ];
+      mockClient.getProjectStatuses.mockResolvedValue(partialCustom);
+      const t = new BacklogTracker({ client: mockClient as unknown as BacklogClient, projectKey: "STUDY" });
+      await t.init();
+      expect(t.isCustomStatusMode()).toBe(true);
+
+      mockClient.getIssue.mockResolvedValue({
+        summary: "決済APIの追加",
+        status: { id: 103, name: "実装中" },
+      });
+      await t.updateLifecycle("STUDY-2", "waiting_confirmation", { comment: "質問があります" });
+
+      expect(mockClient.updateIssue).toHaveBeenCalledWith(
+        "STUDY-2",
+        expect.objectContaining({
+          summary: "[確認待ち] 決済APIの追加",
+          statusId: 1,
+          comment: "質問があります",
+        })
+      );
+    });
+  });
+
   describe("カスタム状態モードでの動作", () => {
     beforeEach(async () => {
       mockClient.getProjectStatuses.mockResolvedValue(customStatuses);

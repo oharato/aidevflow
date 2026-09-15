@@ -1,9 +1,6 @@
 import path from "path";
 import fs from "fs";
-import { exec } from "child_process";
-import { promisify } from "util";
-
-const execAsync = promisify(exec);
+import { runCommand } from "../git/exec.js";
 import type { IIssueTracker, TrackedIssue, IssueLifecycleState } from "../tracker/types.js";
 import { wrapLegacyIssueClient } from "../tracker/factory.js";
 import type { IAgentRunner, AgentRole, AgentContext } from "../agents/types.js";
@@ -16,8 +13,7 @@ import { QuotaLockManager, parseResetDuration } from "./quota-lock.js";
 import { loadWorkflow } from "../workflow/loader.js";
 import { WorkflowEngine } from "../workflow/engine.js";
 import { PermissionGuard, type GitSnapshot } from "../workflow/permission.js";
-import { parseDecision } from "../workflow/decision.js";
-import type { WorkflowStep } from "../workflow/types.js";
+import type { WorkflowStep, DecisionKeyword, StepEvaluationResult } from "../workflow/types.js";
 import {
   PHASE_TAGS,
   formatSummaryWithPhase,
@@ -36,6 +32,10 @@ export interface ProcessIssueResult {
   rejectionCount?: number;
   newSummary?: string;
   isQuota?: boolean;
+  /** デーモン停止シグナルによる中断（チケット無変更・失敗扱いにしない） */
+  interrupted?: boolean;
+  /** 再試行しても解消しない準備エラー（リポジトリ未記載・clone 失敗等）。ポーラーがバックオフ制御に使う */
+  failed?: boolean;
 }
 
 /**
@@ -188,6 +188,10 @@ export class AgentDispatcher {
 
   getRunner(): IAgentRunner {
     return this.runner;
+  }
+
+  isDryRun(): boolean {
+    return this.dryRun;
   }
 
   getWorktreeManager(): GitWorktreeManager {
@@ -360,7 +364,29 @@ export class AgentDispatcher {
         return isFastMode ? "完了" : "要件レビュー";
       case "requirement-reviewer":
         return "完了";
+      default:
+        // 組み込み 5 役以外のカスタムロール: 遷移先は workflow.yaml の rules で解決される
+        return "未対応";
     }
+  }
+
+  /**
+   * ランナー結果から宣言的ワークフローの決定キーワードを解決する。
+   * 差し戻し・人間確認要請の判定結果を最優先し、それ以外は <!-- DECISION --> の値、
+   * 無ければロール既定値（spec-writer→PLANNED / developer→IMPLEMENTED / その他→APPROVED）を使う。
+   */
+  resolveDecisionKeyword(
+    role: string,
+    result: { isRejection?: boolean; decision?: { keyword: DecisionKeyword } },
+    hasExplicitHumanRequest: boolean
+  ): DecisionKeyword {
+    if (hasExplicitHumanRequest) return "HUMAN_REQUIRED";
+    if (result.isRejection) return "REJECTED";
+    const kw = result.decision?.keyword;
+    if (kw && kw !== "REJECTED" && kw !== "HUMAN_REQUIRED") return kw;
+    if (role === "spec-writer") return "PLANNED";
+    if (role === "developer") return "IMPLEMENTED";
+    return "APPROVED";
   }
 
 
@@ -530,7 +556,7 @@ export class AgentDispatcher {
       if (this.tracker) {
         await this.tracker.addComment(issueKey, `⚠️ **エラー**: ${errMsg}`).catch(() => {});
       }
-      return { handled: false };
+      return { handled: false, failed: true };
     }
 
     console.log(`[Dispatcher] 対象リポジトリ (${rawRepoPaths.length}件):`, rawRepoPaths);
@@ -562,7 +588,7 @@ export class AgentDispatcher {
       if (this.tracker) {
         await this.tracker.addComment(issueKey, `⚠️ **エラー**: ${errMsg}`).catch(() => {});
       }
-      return { handled: false };
+      return { handled: false, failed: true };
     }
 
     let recentComments: string[] = [];
@@ -626,6 +652,18 @@ export class AgentDispatcher {
     const result = await this.runner.run(role as AgentRole, context);
     const durationMs = Date.now() - startTime;
 
+    // デーモン停止シグナルによる中断は「異常終了」ではない。チケットは無変更のまま残し、次回起動時に同じ
+    // ステップから再開させる（確認待ちへ倒すと、単なる再起動のたびに人間の介入が必要になってしまう）。
+    if (result.interrupted) {
+      console.warn(`[Dispatcher] ⏹ エージェント [${role}] はデーモン停止により中断されました。チケット ${issueKey} は変更せず、次回起動時に再開します。`);
+      this.logger?.warn("agent_interrupted", `エージェント中断 (デーモン停止): ${issueKey} [${role}]`, {
+        issueKey,
+        role,
+        durationMs,
+      });
+      return { handled: false, interrupted: true };
+    }
+
     // 権限制御 (edit: false) の場合、実行後の状態を検証し不正変更があれば即時ロールバック
     const rollbackReasons: string[] = [];
     if (!editAllowed) {
@@ -662,16 +700,16 @@ export class AgentDispatcher {
     if (editAllowed) {
       for (const target of worktreeTargets) {
         try {
-          const { stdout: statusOut } = await execAsync("git status --porcelain", {
+          const { stdout: statusOut } = await runCommand("git", ["status", "--porcelain"], {
             cwd: target.worktreeDir,
           });
           if (statusOut && statusOut.trim().length > 0) {
             console.log(`[Dispatcher] 未コミットの変更・ドキュメントを検出 (${target.repoName})。自動コミットします...`);
-            await execAsync("git add -A", { cwd: target.worktreeDir });
+            await runCommand("git", ["add", "-A"], { cwd: target.worktreeDir });
             const commitMsg = isInvestigation
               ? `docs(${role}): record investigation and design artifacts for ${issueKey}`
               : `chore(${role}): auto commit repository artifacts for ${issueKey}`;
-            await execAsync(`git commit -m "${commitMsg}"`, { cwd: target.worktreeDir });
+            await runCommand("git", ["commit", "-m", commitMsg], { cwd: target.worktreeDir });
           }
         } catch {
           // コミット失敗時（差分なしやコンフリクト等）はスキップ
@@ -776,24 +814,75 @@ export class AgentDispatcher {
         : "エージェントから人間への確認要請がありました";
     }
 
-    const isSpecApprovalWait =
-      result.success &&
-      !result.isRejection &&
-      !isEscalation &&
-      !isInvestigation &&
-      role === "spec-reviewer" &&
-      this.requireHumanSpecApproval;
+    // 5-2. 宣言的ワークフロー (workflow.yaml の rules) による次ステップ評価
+    //      決定キーワード → rules[].if / goto / human_gate / human_escalation を WorkflowEngine で評価する。
+    //      現在ステップが定義に無い（レガシー・カスタム状態名のみ等）場合のみ、従来のハードコード遷移にフォールバックする。
+    const decisionKeyword = this.resolveDecisionKeyword(role, result, hasExplicitHumanRequest);
+    let evaluation: StepEvaluationResult | null = null;
+    if (result.success && currentStep && workflowDef.steps[currentStep.name]) {
+      try {
+        const engine = new WorkflowEngine(workflowDef, currentStep.name);
+        evaluation = engine.evaluateNextStep(decisionKeyword, {
+          requireHumanSpecApproval: this.requireHumanSpecApproval,
+        });
+        this.logger?.info("workflow_evaluated", `ワークフロー評価: ${currentStep.name} --${decisionKeyword}--> ${evaluation.nextStepName}`, {
+          issueKey,
+          role,
+          data: { workflow: workflowDef.name, step: currentStep.name, decision: decisionKeyword, next: evaluation.nextStepName, isHumanGate: evaluation.isHumanGate, isEscalation: evaluation.isEscalation },
+        });
+      } catch (evalErr: unknown) {
+        console.warn(`[Dispatcher] ワークフロー評価に失敗したため従来遷移にフォールバックします:`, evalErr);
+        evaluation = null;
+      }
+    }
 
-    const isFinalApproval =
-      result.success &&
-      !result.isRejection &&
-      !isEscalation &&
-      (isInvestigation ? role === "spec-reviewer" : (isFastMode ? role === "code-reviewer" : role === "requirement-reviewer"));
+    if (evaluation?.isEscalation && !isEscalation) {
+      isEscalation = true;
+      escalationReason = escalationReason || "ワークフロー定義 (human_escalation) により人間確認が必要と判定されました";
+    }
+
+    const isSpecApprovalWait = evaluation
+      ? (evaluation.isHumanGate && !evaluation.isRejection && !isEscalation)
+      : (result.success &&
+          !result.isRejection &&
+          !isEscalation &&
+          !isInvestigation &&
+          role === "spec-reviewer" &&
+          this.requireHumanSpecApproval);
+
+    const isFinalApproval = evaluation
+      ? (evaluation.nextStepName === "COMPLETE" && !evaluation.isRejection && !isEscalation)
+      : (result.success &&
+          !result.isRejection &&
+          !isEscalation &&
+          (isInvestigation ? role === "spec-reviewer" : (isFastMode ? role === "code-reviewer" : role === "requirement-reviewer")));
     const isCustom = this.isCustomStatusMode(statuses);
+
+    // 次ステップ定義の解決
+    let nextStepDef: WorkflowStep | null = null;
+    if (!isEscalation && !isSpecApprovalWait && !isFinalApproval) {
+      if (evaluation && evaluation.nextStepName !== "COMPLETE" && evaluation.nextStepName !== "ABORT") {
+        nextStepDef = workflowDef.steps[evaluation.nextStepName] || null;
+      } else if (!evaluation) {
+        const nextStatusOrRole = this.getNextStatusName(role as AgentRole, result.isRejection ?? false, isInvestigation, isFastMode);
+        const nextRole = this.resolveRoleFromStatus(nextStatusOrRole) || nextStatusOrRole;
+        nextStepDef =
+          workflowDef.steps[nextRole] ||
+          Object.values(workflowDef.steps).find(
+            (s: WorkflowStep) => s.role === nextRole || s.name === nextRole || s.custom_status === nextStatusOrRole
+          ) || null;
+      }
+
+      // 次ステップが解決できない場合は「コメントだけ投稿して処理中のまま放置」せず、確認待ちに倒して停止する
+      // （放置すると同じエージェントが毎ポーリング再実行される無限ループになる）
+      if (!nextStepDef) {
+        isEscalation = true;
+        escalationReason = `ステップ [${role}] の次の遷移先をワークフロー "${workflowDef.name}" から解決できませんでした (決定: ${decisionKeyword})`;
+      }
+    }
 
     // 次ステータスおよび表示名の決定
     let nextStatusTarget: string;
-    let nextStepDef: WorkflowStep | null = null;
     let newSummary: string | undefined = undefined;
 
     if (isCustom) {
@@ -804,38 +893,24 @@ export class AgentDispatcher {
       } else if (isFinalApproval) {
         nextStatusTarget = "完了";
       } else {
-        const nextStatusOrRole = this.getNextStatusName(role as AgentRole, result.isRejection ?? false, isInvestigation, isFastMode);
-        const nextRole = this.resolveRoleFromStatus(nextStatusOrRole) || nextStatusOrRole;
-        nextStepDef =
-          workflowDef.steps[nextRole] ||
-          Object.values(workflowDef.steps).find(
-            (s: WorkflowStep) => s.role === nextRole || s.name === nextRole || s.custom_status === nextStatusOrRole
-          ) || null;
-        nextStatusTarget = nextStepDef?.custom_status || (nextStepDef ? `[${nextStepDef.name}]` : nextStatusOrRole);
+        nextStatusTarget = nextStepDef?.custom_status || `[${nextStepDef?.name}]`;
       }
     } else {
       // プレフィックスモード
+      let nextPhaseTag: string;
       if (isEscalation) {
-        const nextPhaseTag = PHASE_TAGS.confirmHuman;
-        newSummary = formatSummaryWithPhase(issueSummary, nextPhaseTag);
-        nextStatusTarget = `[${nextPhaseTag}]`;
+        nextPhaseTag = PHASE_TAGS.confirmHuman;
+      } else if (isSpecApprovalWait) {
+        nextPhaseTag = PHASE_TAGS.specApprovalWait;
+      } else if (isFinalApproval) {
+        nextPhaseTag = isInvestigation ? PHASE_TAGS.investigationCompleted : PHASE_TAGS.completed;
+      } else if (nextStepDef?.backlog_tag) {
+        nextPhaseTag = nextStepDef.backlog_tag.replace(/^\[|\]$/g, "");
       } else {
-        const nextPhaseTag = result.success
-          ? getNextPhaseTag(role as AgentRole, result.isRejection ?? false, isInvestigation, isFastMode, this.requireHumanSpecApproval)
-          : (parsePhaseFromSummary(issueSummary).tag || getNextPhaseTag(role as AgentRole, false, isInvestigation, isFastMode, this.requireHumanSpecApproval));
-        newSummary = formatSummaryWithPhase(issueSummary, nextPhaseTag);
-        nextStatusTarget = `[${nextPhaseTag}]`;
-
-        if (!isFinalApproval && !isSpecApprovalWait) {
-          const nextStatusOrRole = this.getNextStatusName(role as AgentRole, result.isRejection ?? false, isInvestigation, isFastMode);
-          const nextRole = this.resolveRoleFromStatus(nextStatusOrRole) || nextStatusOrRole;
-          nextStepDef =
-            workflowDef.steps[nextRole] ||
-            Object.values(workflowDef.steps).find(
-              (s: WorkflowStep) => s.role === nextRole || s.name === nextRole || s.custom_status === nextStatusOrRole
-            ) || null;
-        }
+        nextPhaseTag = getNextPhaseTag(role as AgentRole, result.isRejection ?? false, isInvestigation, isFastMode, this.requireHumanSpecApproval);
       }
+      newSummary = formatSummaryWithPhase(issueSummary, nextPhaseTag);
+      nextStatusTarget = `[${nextPhaseTag}]`;
     }
 
     // 6. チケットコメント文面の構築
@@ -1146,23 +1221,18 @@ export class AgentDispatcher {
             comment: commentBody,
             newSummary,
           });
+        } else if (nextStepDef) {
+          await this.tracker.updateIssueStep(issueKey, nextStepDef, {
+            comment: commentBody,
+            newSummary,
+          });
         } else {
-          const nextStatusOrRole = this.getNextStatusName(role as AgentRole, result.isRejection ?? false, isInvestigation, isFastMode);
-          const nextRole = this.resolveRoleFromStatus(nextStatusOrRole) || nextStatusOrRole;
-          const nextStepDef =
-            workflowDef.steps[nextRole] ||
-            Object.values(workflowDef.steps).find(
-              (s) => s.role === nextRole || s.name === nextRole || s.custom_status === nextStatusOrRole
-            );
-
-          if (nextStepDef) {
-            await this.tracker.updateIssueStep(issueKey, nextStepDef, {
-              comment: commentBody,
-              newSummary,
-            });
-          } else {
-            await this.tracker.addComment(issueKey, commentBody);
-          }
+          // ここには到達しない想定（次ステップ未解決時は上でエスカレーションに倒している）
+          await this.tracker.updateLifecycle(issueKey, "waiting_confirmation", {
+            reason: "次ステップ未解決",
+            comment: commentBody,
+            newSummary,
+          });
         }
         console.log(`[Dispatcher] IIssueTracker 経由のステータス更新 & コメント投稿完了!`);
       }

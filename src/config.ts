@@ -27,6 +27,8 @@ export interface AppConfig {
   agyEffort?: "low" | "medium" | "high";
   agyModel?: string;
   agyReviewModel?: string;
+  /** AGENT_RUNNER=claude 時に claude CLI へ渡すモデル名 (未指定なら CLI 既定) */
+  claudeModel?: string;
   logFilePath: string;
   targetIssueType?: string;
   targetCategory?: string;
@@ -41,16 +43,39 @@ export interface AppConfig {
   requireHumanSpecApproval: boolean;
 }
 
+/**
+ * 列挙型環境変数の検証。typo を黙って既定値（Backlog / agy）に落とさず起動時に失敗させる。
+ */
+function validateEnum<T extends string>(name: string, value: string, allowed: readonly T[]): T {
+  const normalized = value.trim().toLowerCase();
+  const hit = allowed.find((a) => a === normalized);
+  if (!hit) {
+    throw new Error(
+      `【設定エラー】${name}="${value}" は無効です。指定可能な値: ${allowed.join(" / ")}`
+    );
+  }
+  return hit;
+}
+
 export function loadConfig(): AppConfig {
   const apiKey = process.env.BACKLOG_API_KEY ?? "";
   const spaceId = process.env.BACKLOG_SPACE_ID || "ohchans";
   const domain = process.env.BACKLOG_DOMAIN || "backlog.jp";
   const projectKey = process.env.BACKLOG_PROJECT_KEY || "STUDY";
   const issueKey = process.env.BACKLOG_ISSUE_KEY || undefined;
-  const trackerType = (process.env.TRACKER_TYPE || process.env.BTS_TYPE || "backlog") as AppConfig["trackerType"];
+  const trackerType = validateEnum(
+    "TRACKER_TYPE",
+    process.env.TRACKER_TYPE || process.env.BTS_TYPE || "backlog",
+    ["backlog", "mock", "github"] as const
+  );
   const pollIntervalSec = Number(process.env.POLL_INTERVAL_SEC) || 10;
   const dryRun = process.env.DRY_RUN === "true";
-  const agentRunner = (process.env.AGENT_RUNNER || "agy") as AppConfig["agentRunner"];
+  const agentRunner = validateEnum(
+    "AGENT_RUNNER",
+    process.env.AGENT_RUNNER || "agy",
+    ["agy", "claude", "mock"] as const
+  );
+  const claudeModel = process.env.CLAUDE_MODEL || undefined;
   const agentWorkDir = process.env.AGENT_WORKDIR || process.cwd();
   const defaultRepoPath = process.env.DEFAULT_REPO_PATH || agentWorkDir;
   const aidevflowHome = process.env.AIDEVFLOW_HOME || path.join(os.homedir(), "aidevflow");
@@ -87,6 +112,7 @@ export function loadConfig(): AppConfig {
     agyEffort,
     agyModel,
     agyReviewModel,
+    claudeModel,
     logFilePath,
     targetIssueType,
     targetCategory,

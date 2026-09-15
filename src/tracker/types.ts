@@ -8,7 +8,8 @@ export type IssueLifecycleState =
   | "in_progress"          // ワークフローステップ実行中 (Backlog: 処理中)
   | "waiting_approval"     // 人間の承認ゲート待ち (human_gate: true による一時停止)
   | "waiting_confirmation" // 人間の確認待ち (エスカレーション / 質問 / クォータ枯渇)
-  | "completed";           // ワークフロー全工程完了 (処理済み・完了 / PR作成済み)
+  | "completed"            // ワークフロー全工程完了・人間の PR レビュー待ち (Backlog: 処理済み / [要件レビュー完了])
+  | "closed";              // 人間がクローズ済み (Backlog: 完了 / GitHub: closed)。リソース掃除の対象はこの状態のみ
 
 /**
  * BTS 非依存の統一課題データ型
@@ -174,4 +175,10 @@ export interface IIssueTracker {
    * BTS のステータス定義一覧を動的に設定（テスト・モック注入用）
    */
   setProjectStatuses?(statuses: Array<{ id?: number | string; name: string } | unknown>): void;
+
+  /**
+   * 単一チケットがフィルタ条件（種別・カテゴリー・[AI]タグ・担当者）を満たすか判定する
+   * （BACKLOG_ISSUE_KEY 単一チケット監視モードでもフィルタを効かせるために使う）
+   */
+  isIssueEligible?(issue: TrackedIssue, filter?: IssueFilterOptions): Promise<boolean>;
 }

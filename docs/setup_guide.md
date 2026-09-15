@@ -58,6 +58,8 @@ cp .env.example .env
 | `AGY_MODEL` | - | `gemini-3.8-flash-high` | メインエージェントで使用する LLM モデル |
 | `AGY_REVIEW_MODEL` | - | `gemini-3.8-flash-medium`| レビューエージェントで使用する LLM モデル |
 | `AGY_EFFORT` | - | `low` | 推論エフォート (`low` / `medium` / `high`) |
+| `CLAUDE_MODEL` | - | (CLI 既定) | `AGENT_RUNNER=claude` 時に `claude --model` へ渡すモデル名 |
+| `MAX_CONSECUTIVE_FAILURES` | - | `5` | 準備エラー（clone 失敗等）の連続回数上限。到達で「確認待ち」に変更して再試行停止 |
 | `AGENT_TIMEOUT` | - | `20m` | エージェントプロセスのタイムアウト時間 |
 | `TARGET_ISSUE_TYPE` | - | (未指定) | 監視対象とする種別名（例: `AI開発`） |
 | `TARGET_CATEGORY` | - | (未指定) | 監視対象とするカテゴリー名（例: `AIパイプライン`） |
