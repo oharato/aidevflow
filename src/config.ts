@@ -31,6 +31,8 @@ export interface AppConfig {
   targetIssueType?: string;
   targetCategory?: string;
   requireAiTag?: boolean;
+  /** 個人用デーモン運用: 担当者が自分（API キー所有者）のチケットのみ処理する */
+  onlyAssignedToMe?: boolean;
   agentTimeout: string;
   maxConcurrency: number;
   quotaLockFilePath: string;
@@ -60,6 +62,7 @@ export function loadConfig(): AppConfig {
   const targetIssueType = process.env.TARGET_ISSUE_TYPE || undefined;
   const targetCategory = process.env.TARGET_CATEGORY || undefined;
   const requireAiTag = process.env.REQUIRE_AI_TAG === "true";
+  const onlyAssignedToMe = process.env.ONLY_ASSIGNED_TO_ME === "true";
   const rawConcurrency = process.env.MAX_CONCURRENCY || process.env.AIDEVFLOW_CONCURRENCY;
   const maxConcurrency = Math.max(1, rawConcurrency ? Number(rawConcurrency) || 2 : 2);
   const quotaLockFilePath = process.env.QUOTA_LOCK_FILE_PATH || ".aidevflow.quota.lock";
@@ -88,6 +91,7 @@ export function loadConfig(): AppConfig {
     targetIssueType,
     targetCategory,
     requireAiTag,
+    onlyAssignedToMe,
     agentTimeout: process.env.AGENT_TIMEOUT || "20m",
     maxConcurrency,
     quotaLockFilePath,

@@ -3,6 +3,7 @@ import type {
   BacklogStatus,
   BacklogComment,
   BacklogProject,
+  BacklogUser,
   GetIssuesParams,
 } from "./types.js";
 
@@ -53,6 +54,20 @@ export class BacklogClient {
     return (await res.json()) as BacklogProject;
   }
 
+  /**
+   * API キーの所有者（自分自身）のユーザー情報を取得
+   * 個人用デーモン運用（ONLY_ASSIGNED_TO_ME）で担当者フィルタの基準に使う
+   */
+  async getMyself(): Promise<BacklogUser> {
+    const url = `${this.baseUrl}/users/myself?${this.getAuthQuery()}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Backlog API Error [${res.status}] GET /users/myself: ${errText}`);
+    }
+    return (await res.json()) as BacklogUser;
+  }
+
   async getIssue(issueIdOrKey: string): Promise<BacklogIssue> {
     const url = `${this.baseUrl}/issues/${encodeURIComponent(issueIdOrKey)}?${this.getAuthQuery()}`;
     const res = await fetch(url);
@@ -75,6 +90,11 @@ export class BacklogClient {
     if (params.statusId && params.statusId.length > 0) {
       for (const sid of params.statusId) {
         query.append("statusId[]", String(sid));
+      }
+    }
+    if (params.assigneeId && params.assigneeId.length > 0) {
+      for (const aid of params.assigneeId) {
+        query.append("assigneeId[]", String(aid));
       }
     }
     if (params.count) {

@@ -181,4 +181,6 @@ workflows/
   - TAKT および Just Do It (jdi) の思想を統合した YAML 宣言的ステップ定義、決定キーワード（`<!-- DECISION: ... -->`）による堅牢なルーティング、レビュアー権限制御（`edit: false`）による多層防御アーキテクチャ
 - 🧩 **[Issue Tracker (BTS) 抽象化設計書](docs/issue_tracker_abstraction.md)**
   - 課題管理システム（BTS）の密結合を解消する `IIssueTracker` 抽象レイヤー設計。宣言的ワークフロー（`workflow.yaml`）と連動する動的ステップマッピング、`BacklogTracker` アダプター、テスト用 `MockIssueTracker` による高速検証アーキテクチャ
+- 👥 **[デーモン配置設計書](docs/deployment_topology.md)**
+  - 共用 VM での「個人用デーモン（各開発者が自分の認証で起動）」と「チーム用デーモン（サービスユーザー + bot キー）」の 7 視点比較、担当者フィルタ `ONLY_ASSIGNED_TO_ME` の設計、個人用セットアップ手順とチーム用への移行手順
 

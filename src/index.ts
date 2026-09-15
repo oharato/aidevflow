@@ -116,6 +116,7 @@ async function main() {
       targetIssueType: config.targetIssueType,
       targetCategory: config.targetCategory,
       requireAiTag: config.requireAiTag,
+      onlyAssignedToMe: config.onlyAssignedToMe,
     },
     config.maxConcurrency,
     quotaLockManager,

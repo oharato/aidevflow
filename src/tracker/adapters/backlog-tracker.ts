@@ -39,6 +39,9 @@ export class BacklogTracker implements IIssueTracker {
   private projectStatuses: BacklogStatus[] = [];
   private isCustomMode: boolean = false;
   private customStatusModeOverride?: boolean;
+  /** API キー所有者（自分）の Backlog ユーザーID。onlyAssignedToMe 使用時に遅延取得してキャッシュ */
+  private myUserId: number | null = null;
+  private myUserName: string | null = null;
 
   constructor(options: BacklogTrackerOptions) {
     this.client = options.client;
@@ -87,6 +90,29 @@ export class BacklogTracker implements IIssueTracker {
   }
 
   /**
+   * API キー所有者（自分）のユーザー情報を取得してキャッシュする
+   * 個人用デーモン運用（ONLY_ASSIGNED_TO_ME=true）で担当者フィルタの基準にする
+   */
+  async resolveMyself(): Promise<{ id: number; name: string }> {
+    if (this.myUserId !== null) {
+      return { id: this.myUserId, name: this.myUserName || "" };
+    }
+    if (typeof this.client.getMyself !== "function") {
+      throw new Error(
+        "[BacklogTracker] onlyAssignedToMe を使うには BacklogClient.getMyself() が必要です"
+      );
+    }
+    const me = await this.client.getMyself();
+    this.myUserId = me.id;
+    this.myUserName = me.name;
+    return { id: me.id, name: me.name };
+  }
+
+  getMyUserId(): number | null {
+    return this.myUserId;
+  }
+
+  /**
    * 状態追跡・スキャン対象の候補チケット一覧を取得 (非アクション対象も含む)
    */
   async fetchCandidateIssues(
@@ -97,8 +123,15 @@ export class BacklogTracker implements IIssueTracker {
       await this.init();
     }
 
+    // 担当者フィルタ: API 側 (assigneeId[]) と取得後の二重チェックで他人のチケットを除外
+    let myId: number | null = null;
+    if (filter?.onlyAssignedToMe) {
+      myId = (await this.resolveMyself()).id;
+    }
+
     const rawIssues = await this.client.getIssues({
       projectId: [this.projectId!],
+      ...(myId !== null ? { assigneeId: [myId] } : {}),
       sort: "updated",
       order: "asc",
       count: 50,
@@ -107,6 +140,11 @@ export class BacklogTracker implements IIssueTracker {
     const candidates: TrackedIssue[] = [];
 
     for (const raw of rawIssues) {
+      // 0. 担当者フィルタ (API 側で絞れなかった場合の保険)
+      if (myId !== null && raw.assignee?.id !== myId) {
+        continue;
+      }
+
       // 1. 種別フィルタ
       if (filter?.targetIssueType && raw.issueType?.name !== filter.targetIssueType) {
         continue;
@@ -396,6 +434,8 @@ export class BacklogTracker implements IIssueTracker {
       recentComments: [],
       issueType: raw.issueType?.name,
       categories: raw.category?.map((c) => c.name),
+      assigneeId: raw.assignee?.id,
+      assigneeName: raw.assignee?.name,
       isInvestigation,
       isFastMode,
       updatedAt: raw.updated || raw.created,

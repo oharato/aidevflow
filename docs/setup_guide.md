@@ -11,6 +11,7 @@
 - 🛡️ **[トラブルシューティング & エスカレーション仕様書](troubleshooting.md)** (無限ループ防止・クォータ枯渇・エスカレーション)
 - 🎼 **[宣言的ワークフローエンジン & 権限制御設計書](declarative_workflow_engine_design.md)** (YAML定義・決定キーワード・edit:false多層防御)
 - 🧩 **[Issue Tracker (BTS) 抽象化設計書](issue_tracker_abstraction.md)** (BTS抽象化・BacklogAdapter・MockTracker)
+- 👥 **[デーモン配置設計書](deployment_topology.md)** (個人用デーモン vs チーム用デーモン・担当者フィルタ)
 
 ---
 
@@ -61,6 +62,7 @@ cp .env.example .env
 | `TARGET_ISSUE_TYPE` | - | (未指定) | 監視対象とする種別名（例: `AI開発`） |
 | `TARGET_CATEGORY` | - | (未指定) | 監視対象とするカテゴリー名（例: `AIパイプライン`） |
 | `REQUIRE_AI_TAG` | - | `false` | `true` の場合、件名に `[AI]` を含む課題のみ対象化 |
+| `ONLY_ASSIGNED_TO_ME` | - | `false` | `true` の場合、担当者が API キー所有者（自分）の課題のみ対象化。個人用デーモン運用で必須（[配置設計書](deployment_topology.md)） |
 | `DRY_RUN` | - | `false` | `true` の場合、Git push や PR 作成をシミュレート |
 | `LOG_FILE_PATH` | - | `logs/aidevflow.jsonl` | 構造化ログ（JSONL）の出力パス |
 | `AIDEVFLOW_HOME` | - | `~/aidevflow` | リポジトリ・Worktree のベース配置ディレクトリ |
@@ -117,6 +119,13 @@ EnvironmentFile=/home/oharato/workspace/aidevflow/.env
 [Install]
 WantedBy=default.target
 ```
+
+> [!NOTE]
+> **個人用デーモン運用（共用 VM に各開発者が自分のユーザーで常駐させる場合）**
+> - `.env` に `ONLY_ASSIGNED_TO_ME=true` を設定し、`claude` / `gh` は自分のアカウントでログインしておきます。
+> - systemd から起動したシェルの PATH は最小構成のため、`[Service]` に
+>   `Environment=PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin` を追加してください。
+> - ログアウト後もデーモンを動かし続けるには `loginctl enable-linger $USER` を実行します。
 
 ### ② サービスの有効化と起動
 ```bash

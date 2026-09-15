@@ -13,6 +13,7 @@ export interface PollerFilterOptions {
   targetIssueType?: string;
   targetCategory?: string;
   requireAiTag?: boolean;
+  onlyAssignedToMe?: boolean;
 }
 
 export class IssuePoller {
@@ -135,6 +136,9 @@ export class IssuePoller {
     }
     if (this.filterOptions?.requireAiTag) {
       console.log(`[Poller] フィルタ: 件名 [AI] タグ必須`);
+    }
+    if (this.filterOptions?.onlyAssignedToMe) {
+      console.log(`[Poller] フィルタ: 担当者が自分（API キー所有者）のチケットのみ対象【個人用デーモンモード】`);
     }
   }
 

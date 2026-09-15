@@ -6,6 +6,7 @@ import { BUILTIN_DEFAULT_WORKFLOW } from "../../src/workflow/loader.js";
 
 type MockBacklogClient = {
   getProject: ReturnType<typeof vi.fn>;
+  getMyself: ReturnType<typeof vi.fn>;
   getProjectStatuses: ReturnType<typeof vi.fn>;
   getIssues: ReturnType<typeof vi.fn>;
   getIssue: ReturnType<typeof vi.fn>;
@@ -39,6 +40,7 @@ describe("BacklogTracker", () => {
   beforeEach(() => {
     mockClient = {
       getProject: vi.fn().mockResolvedValue({ id: 10, name: "Test Project", projectKey: "STUDY" }),
+      getMyself: vi.fn().mockResolvedValue({ id: 501, name: "ohara" }),
       getProjectStatuses: vi.fn().mockResolvedValue(standardStatuses),
       getIssues: vi.fn().mockResolvedValue([]),
       getIssue: vi.fn(),
@@ -135,6 +137,70 @@ describe("BacklogTracker", () => {
           statusId: 1, // 未対応
           comment: "質問があります",
         })
+      );
+    });
+  });
+
+  describe("個人用デーモンモード (onlyAssignedToMe)", () => {
+    const makeIssue = (key: string, assignee: { id: number; name: string } | null): BacklogIssue => ({
+      id: Number(key.split("-")[1]),
+      projectId: 10,
+      issueKey: key,
+      keyId: Number(key.split("-")[1]),
+      issueType: { id: 1, name: "タスク" },
+      summary: `[詳細設計中] ${key} のタスク`,
+      description: "",
+      status: { id: 2, projectId: 10, name: "処理中", color: "#4488c5", displayOrder: 2 },
+      assignee,
+      createdUser: { id: 1, name: "User" },
+      created: "2026-09-15T00:00:00Z",
+      updated: "2026-09-15T00:00:00Z",
+    });
+
+    beforeEach(async () => {
+      await tracker.init();
+    });
+
+    it("担当者が自分のチケットのみ返し、他人・未割り当てを除外すること", async () => {
+      mockClient.getIssues.mockResolvedValue([
+        makeIssue("STUDY-1", { id: 501, name: "ohara" }),
+        makeIssue("STUDY-2", { id: 999, name: "someone" }),
+        makeIssue("STUDY-3", null),
+      ]);
+
+      const actionable = await tracker.fetchActionableIssues(BUILTIN_DEFAULT_WORKFLOW, {
+        onlyAssignedToMe: true,
+      });
+
+      expect(actionable.map((i) => i.key)).toEqual(["STUDY-1"]);
+      expect(actionable[0].assigneeId).toBe(501);
+      expect(actionable[0].assigneeName).toBe("ohara");
+    });
+
+    it("API 呼び出しに assigneeId[] を付与し、自分のユーザー情報は 1 回だけ取得すること", async () => {
+      mockClient.getIssues.mockResolvedValue([]);
+
+      await tracker.fetchActionableIssues(BUILTIN_DEFAULT_WORKFLOW, { onlyAssignedToMe: true });
+      await tracker.fetchActionableIssues(BUILTIN_DEFAULT_WORKFLOW, { onlyAssignedToMe: true });
+
+      expect(mockClient.getMyself).toHaveBeenCalledTimes(1);
+      expect(mockClient.getIssues).toHaveBeenLastCalledWith(
+        expect.objectContaining({ projectId: [10], assigneeId: [501] })
+      );
+    });
+
+    it("フィルタ未指定時は担当者に関係なく全チケットを返し、getMyself を呼ばないこと", async () => {
+      mockClient.getIssues.mockResolvedValue([
+        makeIssue("STUDY-1", { id: 501, name: "ohara" }),
+        makeIssue("STUDY-2", { id: 999, name: "someone" }),
+      ]);
+
+      const actionable = await tracker.fetchActionableIssues(BUILTIN_DEFAULT_WORKFLOW);
+
+      expect(actionable.length).toBe(2);
+      expect(mockClient.getMyself).not.toHaveBeenCalled();
+      expect(mockClient.getIssues).toHaveBeenLastCalledWith(
+        expect.not.objectContaining({ assigneeId: expect.anything() })
       );
     });
   });

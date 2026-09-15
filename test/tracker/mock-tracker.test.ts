@@ -53,6 +53,38 @@ describe("MockIssueTracker", () => {
     expect(actionable[0].key).toBe("TEST-1");
   });
 
+  it("onlyAssignedToMe で自分が担当のチケットのみ取得できること", async () => {
+    tracker.setCurrentUser({ id: 7, name: "me" });
+    tracker.addMockIssue({
+      key: "TEST-1",
+      title: "自分のタスク",
+      currentStepName: "spec-writer",
+      lifecycleState: "in_progress",
+      assigneeId: 7,
+    });
+    tracker.addMockIssue({
+      key: "TEST-2",
+      title: "他人のタスク",
+      currentStepName: "spec-writer",
+      lifecycleState: "in_progress",
+      assigneeId: 8,
+    });
+    tracker.addMockIssue({
+      key: "TEST-3",
+      title: "未割り当てのタスク",
+      currentStepName: "spec-writer",
+      lifecycleState: "in_progress",
+    });
+
+    const mine = await tracker.fetchActionableIssues(BUILTIN_DEFAULT_WORKFLOW, {
+      onlyAssignedToMe: true,
+    });
+    expect(mine.map((i) => i.key)).toEqual(["TEST-1"]);
+
+    const all = await tracker.fetchActionableIssues(BUILTIN_DEFAULT_WORKFLOW);
+    expect(all.length).toBe(3);
+  });
+
   it("updateIssueStep で次ステップへの遷移とコメントが記録されること", async () => {
     tracker.addMockIssue({
       key: "TEST-1",
