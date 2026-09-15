@@ -58,7 +58,8 @@ export class IssuePoller {
     quotaProbeIntervalSec: number = 300,
     quotaAutoResume: boolean = true,
     cleaner?: ResourceCleaner,
-    cleanupIntervalMinutes?: number
+    cleanupIntervalMinutes?: number,
+    maxConsecutiveFailures?: number
   ) {
     this.tracker = wrapLegacyIssueClient(trackerOrClient, undefined, projectKey);
     this.dispatcher = dispatcher;
@@ -86,7 +87,7 @@ export class IssuePoller {
       );
     this.maxConsecutiveFailures = Math.max(
       1,
-      parseInt(process.env.MAX_CONSECUTIVE_FAILURES || "5", 10) || 5
+      maxConsecutiveFailures ?? (parseInt(process.env.MAX_CONSECUTIVE_FAILURES || "5", 10) || 5)
     );
     const intervalMins =
       cleanupIntervalMinutes ??

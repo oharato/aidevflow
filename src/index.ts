@@ -39,8 +39,19 @@ async function main() {
   }
   lock.registerCleanupHandlers();
 
-  const config = loadConfig();
+  let config;
+  try {
+    config = loadConfig();
+  } catch (err: unknown) {
+    console.error(err instanceof Error ? err.message : String(err));
+    lock.release();
+    process.exit(1);
+  }
+  if (config.workflowsDir && !process.env.AIDEVFLOW_WORKFLOWS_DIR) {
+    process.env.AIDEVFLOW_WORKFLOWS_DIR = config.workflowsDir;
+  }
   const logger = new JsonlLogger(config.logFilePath);
+  console.log(`[Config] 読み込んだ設定ファイル: ${config.loadedFiles.length > 0 ? config.loadedFiles.join(", ") : "(なし: 既定値 + 環境変数)"}`);
   console.log(`[Logger] JSONLログ出力先: ${logger.getLogFilePath()}`);
   console.log(`[Worktree] ベース作業ディレクトリ: ${config.aidevflowHome}`);
 
@@ -121,7 +132,10 @@ async function main() {
     config.maxConcurrency,
     quotaLockManager,
     config.quotaProbeIntervalSec,
-    config.quotaAutoResume
+    config.quotaAutoResume,
+    undefined,
+    config.cleanupIntervalMinutes,
+    config.maxConsecutiveFailures
   );
 
   // ロックは実行中タスクの完了を待ってから解放する（シグナル直後に消すと二重起動の窓が開く）

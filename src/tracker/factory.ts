@@ -17,7 +17,7 @@ export function createTracker(config: AppConfig): IIssueTracker {
     default: {
       if (!config.backlogApiKey) {
         throw new Error(
-          "【エラー】BACKLOG_API_KEY が設定されていません。.env ファイルに BACKLOG_API_KEY=xxx を設定してください。"
+          "【エラー】BACKLOG_API_KEY が設定されていません。.env ファイル（秘密情報専用）に BACKLOG_API_KEY=xxx を設定してください。"
         );
       }
       const client = new BacklogClient(

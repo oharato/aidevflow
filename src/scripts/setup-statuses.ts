@@ -27,7 +27,7 @@ async function main() {
 
   if (!config.backlogApiKey) {
     console.error("【エラー】BACKLOG_API_KEY が設定されていません。");
-    console.error(".env ファイルに設定してください。");
+    console.error(".env ファイル（秘密情報専用）に設定してください。スペースID・プロジェクトキーは config.local.yml に書きます。");
     process.exit(1);
   }
 

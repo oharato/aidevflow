@@ -9,9 +9,9 @@
 ## 結論
 
 1. **まず「個人用デーモン」で開始する**。各開発者が VM に自分の Linux ユーザーでログインし、自分の Backlog API キー・Claude Code ログイン・`gh` 認証で自分のデーモンを動かす。
-2. **個人用を成立させるために担当者フィルタ `ONLY_ASSIGNED_TO_ME=true` を追加した**。同一プロジェクトを複数デーモンが監視しても、担当者が自分のチケットしか処理しない。
+2. **個人用を成立させるために担当者フィルタ（`config.yml` の `tracker.filter.only_assigned_to_me: true`、環境変数 `ONLY_ASSIGNED_TO_ME`）を追加した**。同一プロジェクトを複数デーモンが監視しても、担当者が自分のチケットしか処理しない。
 3. **チーム用デーモン（サービスユーザー + bot キー）は第 2 段階**とする。ライセンス・API キー発行・監査要件が固まり、ワークフロー調整の知見が溜まってから移行する。
-4. **移行は設定変更で済む**。担当者フィルタを外し（または bot を担当者にする運用にし）、`.env` のキーを bot 用に差し替えるだけで、コードの改修は不要。
+4. **移行は設定変更で済む**。`config.yml` の担当者フィルタを外し（または bot を担当者にする運用にし）、`.env` のキーを bot 用に差し替えるだけで、コードの改修は不要。
 
 ---
 
@@ -102,7 +102,7 @@ sequenceDiagram
 | `src/tracker/types.ts` | `IssueFilterOptions.onlyAssignedToMe`、`TrackedIssue.assigneeId / assigneeName` 追加 |
 | `src/tracker/adapters/backlog-tracker.ts` | `resolveMyself()` と候補チケットの担当者フィルタ |
 | `src/tracker/adapters/mock-tracker.ts` | `setCurrentUser()` と同フィルタ（テスト用） |
-| `src/config.ts` / `src/index.ts` / `src/daemon/poller.ts` | 環境変数 `ONLY_ASSIGNED_TO_ME` の読み込み・受け渡し・起動ログ |
+| `src/config.ts` / `src/index.ts` / `src/daemon/poller.ts` | 設定 `tracker.filter.only_assigned_to_me`（環境変数 `ONLY_ASSIGNED_TO_ME`）の読み込み・受け渡し・起動ログ |
 
 ### 運用ルール（個人用）
 
@@ -124,18 +124,20 @@ cd ~/workspace/aidevflow && pnpm install && pnpm build
 claude          # 初回ログイン後 /exit
 gh auth login
 
-# 3. .env（自分の Backlog 個人 API キー）
-cp .env.example .env
+# 3. 設定（秘密情報は .env、個人固有値は config.local.yml、チーム共通は config.yml）
+printf 'BACKLOG_API_KEY=<自分の個人 API キー>\n' > .env && chmod 600 .env
+cp config.local.yml.example config.local.yml
 ```
 
-`.env` に以下を設定する。
+`config.local.yml` に以下を設定する。担当者フィルタ（`tracker.filter.only_assigned_to_me: true`）とランナー（`agent.runner: claude`）はチーム共通の `config.yml` に入っているので触らない。
 
-```dotenv
-BACKLOG_API_KEY=<自分の個人 API キー>
-BACKLOG_PROJECT_KEY=<プロジェクトキー>
-AGENT_RUNNER=claude
-ONLY_ASSIGNED_TO_ME=true
-MAX_CONCURRENCY=1
+```yaml
+tracker:
+  backlog:
+    space_id: <スペースID>
+    project_key: <プロジェクトキー>
+daemon:
+  max_concurrency: 1   # 共用 VM では 1 人あたり 1〜2
 ```
 
 ```bash
@@ -151,7 +153,7 @@ pnpm start        # ログに「フィルタ: 担当者が自分（API キー所
 
 1. サービスユーザー `aidevflow` を作成し、Backlog に bot ユーザーを追加して API キーを発行する。
 2. Anthropic Console で API キーを発行し、月次上限を設定する。
-3. サービスユーザーのホームに aidevflow をクローンし、`.env` を `ONLY_ASSIGNED_TO_ME=false`、`ANTHROPIC_API_KEY=<bot キー>` で構成する。
+3. サービスユーザーのホームに aidevflow をクローンし、`config.local.yml` で `tracker.filter.only_assigned_to_me: false` を上書き、`.env` に bot の `BACKLOG_API_KEY` と `ANTHROPIC_API_KEY` を置く。
 4. 各個人のデーモンを停止し、個人で調整した `workflows/<PROJECT_KEY>/` を統合する。
 
 移行時に追加すると欠点が消える改修（未実装）:
