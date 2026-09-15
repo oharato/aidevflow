@@ -13,6 +13,7 @@ export interface PollerFilterOptions {
   targetIssueType?: string;
   targetCategory?: string;
   requireAiTag?: boolean;
+  onlyAssignedToMe?: boolean;
 }
 
 export class IssuePoller {
@@ -36,6 +37,13 @@ export class IssuePoller {
   private cleaner: ResourceCleaner;
   private cleanupIntervalMs: number;
   private lastCleanupAt: number;
+  /**
+   * 準備エラー（リポジトリ未記載 / clone 失敗 / BTS 更新例外等）が続くチケットの再試行制御。
+   * 以前は失敗時にフィンガープリントを記録せず、毎ポーリング (10 秒) 同じチケットを再ディスパッチしていた。
+   */
+  private failureBackoff: Map<string, { count: number; nextAttemptAt: number }> = new Map();
+  private maxConsecutiveFailures: number;
+  private maxBackoffMs: number = 30 * 60 * 1000;
 
   constructor(
     trackerOrClient: IIssueTracker | object,
@@ -50,7 +58,8 @@ export class IssuePoller {
     quotaProbeIntervalSec: number = 300,
     quotaAutoResume: boolean = true,
     cleaner?: ResourceCleaner,
-    cleanupIntervalMinutes?: number
+    cleanupIntervalMinutes?: number,
+    maxConsecutiveFailures?: number
   ) {
     this.tracker = wrapLegacyIssueClient(trackerOrClient, undefined, projectKey);
     this.dispatcher = dispatcher;
@@ -73,8 +82,13 @@ export class IssuePoller {
         this.tracker,
         dispatcher.getWorktreeManager(),
         dispatcher.getGitHubService(),
-        this.logger
+        this.logger,
+        { dryRun: typeof dispatcher.isDryRun === "function" ? dispatcher.isDryRun() : false }
       );
+    this.maxConsecutiveFailures = Math.max(
+      1,
+      maxConsecutiveFailures ?? (parseInt(process.env.MAX_CONSECUTIVE_FAILURES || "5", 10) || 5)
+    );
     const intervalMins =
       cleanupIntervalMinutes ??
       parseInt(process.env.CLEANUP_INTERVAL_MINUTES || "30", 10);
@@ -135,6 +149,9 @@ export class IssuePoller {
     }
     if (this.filterOptions?.requireAiTag) {
       console.log(`[Poller] フィルタ: 件名 [AI] タグ必須`);
+    }
+    if (this.filterOptions?.onlyAssignedToMe) {
+      console.log(`[Poller] フィルタ: 担当者が自分（API キー所有者）のチケットのみ対象【個人用デーモンモード】`);
     }
   }
 
@@ -230,7 +247,14 @@ export class IssuePoller {
       if (this.targetIssueKey) {
         const singleIssue = await this.tracker.getIssue(this.targetIssueKey, workflowDef);
         issuesToScan = [singleIssue];
-        if (singleIssue.lifecycleState === "in_progress" && singleIssue.currentStepName) {
+        // 単一チケット監視モードでもフィルタ（担当者 / 種別 / カテゴリー / [AI] タグ）を適用する
+        const eligible =
+          typeof this.tracker.isIssueEligible === "function"
+            ? await this.tracker.isIssueEligible(singleIssue, this.filterOptions)
+            : true;
+        if (!eligible) {
+          console.log(`[Poller] 特定チケット ${this.targetIssueKey} はフィルタ条件に合致しないためスキップします`);
+        } else if (singleIssue.lifecycleState === "in_progress" && singleIssue.currentStepName) {
           actionableIssues = [singleIssue];
         }
       } else {
@@ -275,6 +299,12 @@ export class IssuePoller {
 
         if (lastFingerprint === currentFingerprint) {
           continue; // 変更なし
+        }
+
+        // 直前に失敗したチケットはバックオフ期間中は再試行しない
+        const backoff = this.failureBackoff.get(issueKey);
+        if (backoff && Date.now() < backoff.nextAttemptAt) {
+          continue;
         }
 
         issuesToDispatch.push(issue);
@@ -347,17 +377,83 @@ export class IssuePoller {
     try {
       const result = await this.dispatcher.processIssue(issue);
 
+      if (result.interrupted) {
+        // デーモン停止による中断: キャッシュもバックオフも更新せず、次回起動時にそのまま再開させる
+        console.log(`[Poller][${issueKey}] デーモン停止によりチケット処理を中断しました (次回起動時に再開)`);
+        return;
+      }
+
       if (result.handled) {
         const nextFingerprint = isCustom
           ? `${result.nextStatusTarget || statusName}::${role || "none"}`
           : `${result.nextStatusTarget || statusName}::${result.newSummary || issueSummary}::${role || "none"}`;
         this.issueStatusCache.set(issueKey, nextFingerprint);
+        this.failureBackoff.delete(issueKey);
+        console.log(`[Poller][${issueKey}] チケット処理完了 (結果: 成功/更新)`);
+        return;
       }
-      console.log(`[Poller][${issueKey}] チケット処理完了 (結果: ${result.handled ? "成功/更新" : "未処理"})`);
+
+      if (result.failed) {
+        await this.recordFailure(issueKey, currentFingerprint, "準備エラー (リポジトリ未検出 / worktree 準備失敗等)", role);
+      } else {
+        // 対象外 (handled: false, failed なし): 状態が変わるまで再ディスパッチしない
+        this.issueStatusCache.set(issueKey, currentFingerprint);
+        console.log(`[Poller][${issueKey}] チケット処理完了 (結果: 未処理)`);
+      }
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
       console.error(`[Poller][${issueKey}] チケット処理で例外発生:`, err);
       this.logger?.error("error", `チケット処理例外: ${errMsg}`, { issueKey });
+      await this.recordFailure(issueKey, currentFingerprint, `例外: ${errMsg}`, role);
+    }
+  }
+
+  /**
+   * 失敗を記録し、指数バックオフ（ポーリング間隔 × 2^n、最大 30 分）で再試行を抑制する。
+   * 連続失敗が上限 (MAX_CONSECUTIVE_FAILURES, 既定 5) に達したら「確認待ち」に倒して自律再試行を止める。
+   */
+  private async recordFailure(
+    issueKey: string,
+    currentFingerprint: string,
+    reason: string,
+    role: string | null
+  ): Promise<void> {
+    const prev = this.failureBackoff.get(issueKey);
+    const count = (prev?.count || 0) + 1;
+    const delayMs = Math.min(this.intervalMs * Math.pow(2, count), this.maxBackoffMs);
+    this.failureBackoff.set(issueKey, { count, nextAttemptAt: Date.now() + delayMs });
+    // 同じ状態のままなら再ディスパッチしない（エラーコメント投稿で updatedAt が進んでも backoff が効く）
+    this.issueStatusCache.set(issueKey, currentFingerprint);
+
+    console.warn(
+      `[Poller][${issueKey}] 処理失敗 (${count}/${this.maxConsecutiveFailures} 回目): ${reason}。次回再試行は約 ${Math.round(delayMs / 1000)} 秒後`
+    );
+    this.logger?.warn("issue_failed", `チケット処理失敗 (${count}回目): ${issueKey}`, {
+      issueKey,
+      data: { reason, count, retryAfterMs: delayMs },
+    });
+
+    if (count >= this.maxConsecutiveFailures) {
+      console.error(`[Poller][${issueKey}] 連続失敗が上限に達したため「確認待ち」に変更して自律再試行を停止します`);
+      this.failureBackoff.delete(issueKey);
+      try {
+        await this.tracker.updateLifecycle(issueKey, "waiting_confirmation", {
+          reason: "連続失敗上限到達",
+          comment: [
+            `### ⚠️ 【自律パイプライン一時停止】同じエラーが ${count} 回連続したため停止しました`,
+            ``,
+            `- **最終エラー**: ${reason}`,
+            `- **対象フェーズ**: ${role || "不明"}`,
+            ``,
+            `#### 👤 人間側の対応手順 (再開方法):`,
+            `1. チケット詳細の「リポジトリ:」記載、リポジトリのアクセス権、ネットワーク等のエラー原因を解消してください。`,
+            `2. ステータスを **「処理中」** に変更すると、デーモンが同じフェーズから再開します。`,
+          ].join("\n"),
+        });
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[Poller][${issueKey}] 確認待ちへの変更に失敗しました:`, errMsg);
+      }
     }
   }
 

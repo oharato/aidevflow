@@ -148,18 +148,18 @@ export class ProcessLock {
   }
 
   /**
-   * プロセス終了シグナルや例外ハンドラを登録し、終了時に確実にロックを解放する
+   * プロセス終了時（exit）にロックを解放するハンドラを登録する。
+   *
+   * SIGINT / SIGTERM では解放しない: シグナル受信直後にロックを消すと、Graceful Shutdown で
+   * 実行中エージェントの完了を待っている間に別デーモンが起動して同じチケットを二重処理できてしまう。
+   * シグナル時の解放は、アクティブタスク完了後に呼び出し側（index.ts の handleShutdown）が行う。
    */
   registerCleanupHandlers(): void {
     if (this.cleanupRegistered) return;
     this.cleanupRegistered = true;
 
-    const cleanup = () => {
+    process.once("exit", () => {
       this.release();
-    };
-
-    process.once("exit", cleanup);
-    process.once("SIGINT", cleanup);
-    process.once("SIGTERM", cleanup);
+    });
   }
 }

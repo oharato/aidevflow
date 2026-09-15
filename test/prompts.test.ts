@@ -11,6 +11,17 @@ describe("エージェントプロンプト生成 (buildAgentPrompt)", () => {
     workDir: "/worktrees/STUDY-10",
   };
 
+  it("組み込み 5 役以外のカスタムロールでも undefined ではなく汎用プロンプトを返すこと", () => {
+    const prompt = buildAgentPrompt("security-auditor" as unknown as import("../src/agents/types.js").AgentRole, {
+      ...dummyContext,
+      readOnly: true,
+    });
+    expect(typeof prompt).toBe("string");
+    expect(prompt).toContain("security-auditor");
+    expect(prompt).toContain("読み取り専用");
+    expect(prompt).toContain("DECISION");
+  });
+
   it("Code-Reviewer (技術レビュー) のプロンプトに言語・ライブラリの最新性・バージョン点検観点が含まれていること", () => {
     const prompt = buildAgentPrompt("code-reviewer", dummyContext);
 

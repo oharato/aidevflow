@@ -1,3 +1,5 @@
 allowBuilds:
   esbuild: true
 storeDir: /tmp/.pnpm-store
+# サプライチェーン対策: 公開から 7 日 (10080 分) 未満のパッケージはインストールしない (組織ルール)
+minimumReleaseAge: 10080

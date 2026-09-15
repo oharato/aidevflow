@@ -4,10 +4,14 @@ import { EventEmitter } from "events";
 import type { ChildProcess } from "child_process";
 
 let capturedArgs: string[] = [];
+let capturedCmd = "";
+let capturedOptions: { cwd?: string } = {};
 
 vi.mock("child_process", () => ({
-  spawn: vi.fn((cmd: string, args: string[]) => {
+  spawn: vi.fn((cmd: string, args: string[], options: { cwd?: string }) => {
     capturedArgs = args;
+    capturedCmd = cmd;
+    capturedOptions = options || {};
     const stdout = new EventEmitter();
     const stderr = new EventEmitter();
     const mockChild = Object.assign(new EventEmitter(), {
@@ -32,7 +36,50 @@ vi.mock("child_process", () => ({
   }),
 }));
 
-import { AgyRunner, TokenUsageTracker, parseAgyUsageJson } from "../src/agents/runner.js";
+import { AgyRunner, ClaudeCliRunner, TokenUsageTracker, parseAgyUsageJson, parseDurationToMs } from "../src/agents/runner.js";
+
+describe("ClaudeCliRunner (作業ディレクトリ & 権限制御引数)", () => {
+  it("context.workDir (チケットの worktree) を cwd に使い、デーモン自身のディレクトリでは実行しないこと", async () => {
+    const runner = new ClaudeCliRunner("/daemon/checkout", "20m");
+    await runner.run("developer", {
+      issueKey: "STUDY-4",
+      issueSummary: "テスト",
+      issueDescription: "テスト",
+      recentComments: [],
+      workDir: "/home/user/aidevflow/worktrees/STUDY-4/app",
+    });
+    expect(capturedCmd).toBe("claude");
+    expect(capturedOptions.cwd).toBe("/home/user/aidevflow/worktrees/STUDY-4/app");
+    expect(capturedArgs).toContain("-p");
+    expect(capturedArgs).toContain("--dangerously-skip-permissions");
+    expect(capturedArgs).not.toContain("--disallowed-tools");
+  });
+
+  it("readOnly ステップでは --disallowed-tools で編集系ツールを CLI レベルで禁止すること", async () => {
+    const runner = new ClaudeCliRunner("/daemon/checkout", "20m", "claude-sonnet-5");
+    await runner.run("code-reviewer", {
+      issueKey: "STUDY-4",
+      issueSummary: "テスト",
+      issueDescription: "テスト",
+      recentComments: [],
+      workDir: "/wt/STUDY-4",
+      readOnly: true,
+    });
+    const idx = capturedArgs.indexOf("--disallowed-tools");
+    expect(idx).toBeGreaterThan(-1);
+    expect(capturedArgs[idx + 1]).toContain("Edit");
+    expect(capturedArgs[idx + 1]).toContain("Write");
+    expect(capturedArgs).toContain("--model");
+    expect(capturedArgs).toContain("claude-sonnet-5");
+  });
+
+  it("parseDurationToMs が 20m / 90s / 1h を正しく変換すること", () => {
+    expect(parseDurationToMs("20m")).toBe(20 * 60 * 1000);
+    expect(parseDurationToMs("90s")).toBe(90 * 1000);
+    expect(parseDurationToMs("1h")).toBe(60 * 60 * 1000);
+    expect(parseDurationToMs("abc")).toBe(0);
+  });
+});
 
 describe("AgyRunner モデル・エフォート指定", () => {
   it("モデル名に -high, -medium, -low が含まれる場合、--effort フラグを付与しないこと (コンフリクト防止)", async () => {

@@ -11,3 +11,4 @@ logs/*.jsonl
 !logs/.gitkeep
 .daemon.pid
 .aidevflow.lock
+config.local.yml

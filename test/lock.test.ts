@@ -21,6 +21,25 @@ describe("ProcessLock", () => {
     } catch {}
   });
 
+  it("registerCleanupHandlers は SIGINT/SIGTERM でロックを即時解放しないこと (Graceful Shutdown 中の二重起動防止)", () => {
+    const beforeTerm = process.listenerCount("SIGTERM");
+    const beforeInt = process.listenerCount("SIGINT");
+    const beforeExit = process.listenerCount("exit");
+
+    const lock = new ProcessLock(lockFilePath);
+    expect(lock.acquire().success).toBe(true);
+    lock.registerCleanupHandlers();
+
+    expect(process.listenerCount("SIGTERM")).toBe(beforeTerm);
+    expect(process.listenerCount("SIGINT")).toBe(beforeInt);
+    expect(process.listenerCount("exit")).toBe(beforeExit + 1);
+
+    // シグナルを模擬しても（ハンドラが無いので）ロックファイルは残る
+    expect(fs.existsSync(lockFilePath)).toBe(true);
+    lock.release();
+    process.removeAllListeners("exit");
+  });
+
   it("isProcessAlive correctly checks process existence", () => {
     expect(isProcessAlive(process.pid)).toBe(true);
     // 存在しないであろう大きなPID

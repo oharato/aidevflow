@@ -1,0 +1,25 @@
+# =============================================================================
+# aidevflow 個人・マシン固有設定
+#
+#   cp config.local.yml.example config.local.yml で作成する (config.local.yml は .gitignore 対象)
+#   ここに書いた値は config.yml を上書きする。秘密情報 (API キー) は書かず .env に置く。
+# =============================================================================
+
+tracker:
+  backlog:
+    # https://<space_id>.backlog.jp の <space_id> 部分
+    space_id: your_space_id
+    # 監視対象プロジェクトキー
+    project_key: YOUR_PROJECT
+    # 特定の 1 チケットだけを監視・デバッグしたいときのみ
+    # issue_key: YOUR_PROJECT-3
+
+# paths:
+#   # リポジトリ clone と worktree の配置先 (既定: ~/aidevflow)
+#   home: ~/aidevflow
+#   # チケットに「リポジトリ:」の記載がないときのフォールバック先。通常は未設定 (エラー停止) のままにする
+#   default_repo_path: /home/<user>/workspace/default-repo
+
+# daemon:
+#   # 共有 VM で自分の分だけ絞る等、チーム既定値を変えたいときに上書き
+#   max_concurrency: 1

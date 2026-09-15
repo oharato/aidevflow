@@ -62,7 +62,11 @@ export interface GetIssuesParams {
   statusId?: number[];
   issueTypeId?: number[];
   categoryId?: number[];
+  /** 担当者IDで絞り込む (Backlog API: assigneeId[]) */
+  assigneeId?: number[];
   count?: number;
+  /** ページング用オフセット */
+  offset?: number;
   order?: "asc" | "desc";
   sort?: "updated" | "created";
 }

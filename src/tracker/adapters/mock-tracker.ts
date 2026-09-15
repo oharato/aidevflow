@@ -18,6 +18,37 @@ export class MockIssueTracker implements IIssueTracker {
   private commentHistory: Map<string, string[]> = new Map();
   public stepTransitions: Array<{ key: string; nextStep: WorkflowStep }> = [];
   public lifecycleTransitions: Array<{ key: string; state: IssueLifecycleState }> = [];
+  /** onlyAssignedToMe フィルタ検証用の「自分」ユーザー */
+  private currentUser: { id: number; name: string } = { id: 1, name: "mock-user" };
+
+  setCurrentUser(user: { id: number; name: string }): void {
+    this.currentUser = user;
+  }
+
+  getCurrentUser(): { id: number; name: string } {
+    return { ...this.currentUser };
+  }
+
+  async isIssueEligible(issue: TrackedIssue, filter?: IssueFilterOptions): Promise<boolean> {
+    return this.matchesFilter(issue, filter);
+  }
+
+  private matchesFilter(issue: TrackedIssue, filter?: IssueFilterOptions): boolean {
+    if (filter?.onlyAssignedToMe && issue.assigneeId !== this.currentUser.id) {
+      return false;
+    }
+    if (filter?.targetIssueType && issue.issueType !== filter.targetIssueType) {
+      return false;
+    }
+    if (filter?.targetCategory) {
+      const hasCat = issue.categories?.includes(filter.targetCategory);
+      if (!hasCat) return false;
+    }
+    if (filter?.requireAiTag && !/\[AI\]/i.test(issue.title)) {
+      return false;
+    }
+    return true;
+  }
 
   /**
    * テスト用初期チケットの登録
@@ -56,19 +87,7 @@ export class MockIssueTracker implements IIssueTracker {
     filter?: IssueFilterOptions
   ): Promise<TrackedIssue[]> {
     return Array.from(this.issues.values()).filter((issue) => {
-      // 1. 種別フィルタ
-      if (filter?.targetIssueType && issue.issueType !== filter.targetIssueType) {
-        return false;
-      }
-
-      // 2. カテゴリーフィルタ
-      if (filter?.targetCategory) {
-        const hasCat = issue.categories?.includes(filter.targetCategory);
-        if (!hasCat) return false;
-      }
-
-      // 3. [AI] タグ必須フィルタ
-      if (filter?.requireAiTag && !/\[AI\]/i.test(issue.title)) {
+      if (!this.matchesFilter(issue, filter)) {
         return false;
       }
 
@@ -89,19 +108,7 @@ export class MockIssueTracker implements IIssueTracker {
     _workflowDef: WorkflowDefinition,
     filter?: IssueFilterOptions
   ): Promise<TrackedIssue[]> {
-    return Array.from(this.issues.values()).filter((issue) => {
-      if (filter?.targetIssueType && issue.issueType !== filter.targetIssueType) {
-        return false;
-      }
-      if (filter?.targetCategory) {
-        const hasCat = issue.categories?.includes(filter.targetCategory);
-        if (!hasCat) return false;
-      }
-      if (filter?.requireAiTag && !/\[AI\]/i.test(issue.title)) {
-        return false;
-      }
-      return true;
-    });
+    return Array.from(this.issues.values()).filter((issue) => this.matchesFilter(issue, filter));
   }
 
   async getIssue(key: string, _workflowDef?: WorkflowDefinition): Promise<TrackedIssue> {
@@ -162,6 +169,9 @@ export class MockIssueTracker implements IIssueTracker {
         issue.rawStatusName = "処理済み";
         issue.rawTitle = options.newSummary || `[要件レビュー完了] ${issue.title}`;
         break;
+      case "closed":
+        issue.rawStatusName = "完了";
+        break;
       case "in_progress":
         issue.rawStatusName = "処理中";
         break;
@@ -194,7 +204,7 @@ export class MockIssueTracker implements IIssueTracker {
 
   async fetchCompletedIssues(): Promise<TrackedIssue[]> {
     return Array.from(this.issues.values()).filter(
-      (i) => i.lifecycleState === "completed"
+      (i) => i.lifecycleState === "closed"
     );
   }
 

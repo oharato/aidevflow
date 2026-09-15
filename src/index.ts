@@ -39,8 +39,19 @@ async function main() {
   }
   lock.registerCleanupHandlers();
 
-  const config = loadConfig();
+  let config;
+  try {
+    config = loadConfig();
+  } catch (err: unknown) {
+    console.error(err instanceof Error ? err.message : String(err));
+    lock.release();
+    process.exit(1);
+  }
+  if (config.workflowsDir && !process.env.AIDEVFLOW_WORKFLOWS_DIR) {
+    process.env.AIDEVFLOW_WORKFLOWS_DIR = config.workflowsDir;
+  }
   const logger = new JsonlLogger(config.logFilePath);
+  console.log(`[Config] 読み込んだ設定ファイル: ${config.loadedFiles.length > 0 ? config.loadedFiles.join(", ") : "(なし: 既定値 + 環境変数)"}`);
   console.log(`[Logger] JSONLログ出力先: ${logger.getLogFilePath()}`);
   console.log(`[Worktree] ベース作業ディレクトリ: ${config.aidevflowHome}`);
 
@@ -59,7 +70,7 @@ async function main() {
   if (config.agentRunner === "mock") {
     runner = new MockRunner();
   } else if (config.agentRunner === "claude") {
-    runner = new ClaudeCliRunner(config.agentWorkDir);
+    runner = new ClaudeCliRunner(config.agentWorkDir, config.agentTimeout, config.claudeModel);
   } else {
     runner = new AgyRunner(
       config.agentWorkDir,
@@ -116,25 +127,45 @@ async function main() {
       targetIssueType: config.targetIssueType,
       targetCategory: config.targetCategory,
       requireAiTag: config.requireAiTag,
+      onlyAssignedToMe: config.onlyAssignedToMe,
     },
     config.maxConcurrency,
     quotaLockManager,
     config.quotaProbeIntervalSec,
-    config.quotaAutoResume
+    config.quotaAutoResume,
+    undefined,
+    config.cleanupIntervalMinutes,
+    config.maxConsecutiveFailures
   );
 
-  const handleShutdown = async () => {
-    console.log("\nシャットダウン要求を受信しました。終了処理を実行します...");
-    await poller.stop();
-    lock.release();
+  // ロックは実行中タスクの完了を待ってから解放する（シグナル直後に消すと二重起動の窓が開く）
+  let shuttingDown = false;
+  const handleShutdown = async (signal: string) => {
+    if (shuttingDown) {
+      console.log(`\n[Shutdown] 既に終了処理中です (${signal})。実行中タスクの完了を待っています...`);
+      return;
+    }
+    shuttingDown = true;
+    console.log(`\nシャットダウン要求 (${signal}) を受信しました。実行中タスクの完了を待って終了します...`);
+    try {
+      await poller.stop();
+    } finally {
+      lock.release();
+    }
     process.exit(0);
   };
 
   process.on("SIGINT", () => {
-    handleShutdown().catch(() => process.exit(1));
+    handleShutdown("SIGINT").catch(() => {
+      lock.release();
+      process.exit(1);
+    });
   });
   process.on("SIGTERM", () => {
-    handleShutdown().catch(() => process.exit(1));
+    handleShutdown("SIGTERM").catch(() => {
+      lock.release();
+      process.exit(1);
+    });
   });
 
   await poller.start();

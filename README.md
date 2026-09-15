@@ -16,8 +16,9 @@
 pnpm install
 
 # 設定ファイルの作成
-cp .env.example .env
-# .env を開き、BACKLOG_API_KEY や BACKLOG_PROJECT_KEY などを設定
+cp config.local.yml.example config.local.yml   # スペースID・プロジェクトキーを記入
+printf 'BACKLOG_API_KEY=<自分の API キー>\n' > .env   # 秘密情報は .env にだけ置く
+# チーム共通の設定 (ランナー・並行数など) は config.yml に入っている
 ```
 
 ### 2. デーモンの起動
@@ -80,7 +81,7 @@ pnpm run start:bg
 
 > 💡 **人間の設計承認ゲート (`REQUIRE_HUMAN_SPEC_APPROVAL=true`)**:
 > 設計レビュー完了後、実装に入る前に自動的に `[設計承認待ち]`（ステータス: 未対応）で一時停止します。
-> 人間がリポジトリ内の詳細設計書や方針を確認した上で、ステータスを **「処理中」** に変更するだけで実装（`developer`）が開始されます。「アーキテクチャの選定ミスによる実装後の全面書き直し」等の大幅手戻りをゼロに抑えることができます（`.env` で `REQUIRE_HUMAN_SPEC_APPROVAL=false` にすると完全自律の一気通貫リレーも可能）。
+> 人間がリポジトリ内の詳細設計書や方針を確認した上で、ステータスを **「処理中」** に変更するだけで実装（`developer`）が開始されます。「アーキテクチャの選定ミスによる実装後の全面書き直し」等の大幅手戻りをゼロに抑えることができます（`config.yml` の `daemon.require_human_spec_approval` を `false` にすると完全自律の一気通貫リレーも可能）。
 
 ---
 
@@ -170,7 +171,7 @@ workflows/
 - 🌐 **[Agentic SDLC 業界動向 & アーキテクチャ比較](docs/agentic_sdlc_landscape.md)**
   - Flow Engineering、OpenAI Agents API（Codex Harness）、既存フレームワーク（OpenHands, MetaGPT, LangGraph, CrewAI等）との比較、Backlog as a State Store 設計の優位性
 - 🚀 **[環境構築 & 運用ガイド](docs/setup_guide.md)**
-  - 必要要件、`.env` 全パラメータ一覧、Backlog カスタム状態の一括登録、systemd ユーザーサービスによる常駐化手順
+  - 必要要件、設定ファイル（config.yml / config.local.yml / .env）の全項目一覧、Backlog カスタム状態の一括登録、systemd ユーザーサービスによる常駐化手順
 - 🔀 **[複数チケット並行開発 & Git Worktree 仕様書](docs/concurrency_worktree.md)**
   - `git worktree` による完全分離ディレクトリ構造、`MAX_CONCURRENCY`（ワーカープール）、`inFlightIssues` 二重起動防止、Git 排他制御（Mutex）、完了チケット & クローズ済みPRのリソース自動クリーンアップ (`ResourceCleaner`)
 - ⚡ **[クォータ消費最適化 & 軽量パイプライン仕様書](docs/quota_optimization.md)**
@@ -181,4 +182,6 @@ workflows/
   - TAKT および Just Do It (jdi) の思想を統合した YAML 宣言的ステップ定義、決定キーワード（`<!-- DECISION: ... -->`）による堅牢なルーティング、レビュアー権限制御（`edit: false`）による多層防御アーキテクチャ
 - 🧩 **[Issue Tracker (BTS) 抽象化設計書](docs/issue_tracker_abstraction.md)**
   - 課題管理システム（BTS）の密結合を解消する `IIssueTracker` 抽象レイヤー設計。宣言的ワークフロー（`workflow.yaml`）と連動する動的ステップマッピング、`BacklogTracker` アダプター、テスト用 `MockIssueTracker` による高速検証アーキテクチャ
+- 👥 **[デーモン配置設計書](docs/deployment_topology.md)**
+  - 共用 VM での「個人用デーモン（各開発者が自分の認証で起動）」と「チーム用デーモン（サービスユーザー + bot キー）」の 7 視点比較、担当者フィルタ `ONLY_ASSIGNED_TO_ME` の設計、個人用セットアップ手順とチーム用への移行手順
 

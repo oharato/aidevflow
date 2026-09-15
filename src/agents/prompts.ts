@@ -330,5 +330,21 @@ ${buildDecisionInstruction([
   { keyword: "REJECTED", description: "レビュー差し戻し（REJECT）時" },
   { keyword: "HUMAN_REQUIRED", description: "人間の確認・判断が必要な時" },
 ])}`;
+    default:
+      // workflow.yaml で組み込み 5 役以外の role を持つカスタムステップが定義された場合の汎用プロンプト
+      // （従来は undefined を返し spawn("agy", ["-p", undefined]) で TypeError になっていた）
+      return `${baseHeader}
+
+あなたは【${String(role)}】担当のエージェントです。
+【役割】
+チケットの要件と直近のコメントに基づき、担当ステップ「${String(role)}」の作業を遂行し、成果と判断を報告してください。
+${context.readOnly ? "このステップは読み取り専用です。ファイルの作成・編集・コミットは行わず、指摘・判断のみを出力してください。" : "必要に応じてリポジトリ内のファイルを作成・編集し、変更はコミットしてください。"}
+人間の判断が必要な場合は「【人間への確認依頼】」または「CONFIRM_HUMAN」と明記してください。
+
+${buildDecisionInstruction([
+  { keyword: "APPROVED", description: "作業完了・次ステップへ進めてよい時" },
+  { keyword: "REJECTED", description: "前ステップへ差し戻す時" },
+  { keyword: "HUMAN_REQUIRED", description: "人間の確認・判断が必要な時" },
+])}`;
   }
 }

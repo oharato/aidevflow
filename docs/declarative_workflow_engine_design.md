@@ -307,7 +307,8 @@ TAKT の最も重要な知見である「レビュアーによる勝手なコー
 
 ### 5.2. 第 2 層: CLI ツール権限制限
 - **Claude Code CLI (`claude`)**:
-  - `edit: false` の場合、コマンドライン引数に `--disallowed-tools "Edit,Write,NotebookEditCell"`（または Read/Grep/Glob/Bash のみを許可する引数）を付与して起動。
+  - `edit: false` の場合、コマンドライン引数に `--disallowed-tools "Edit,Write,NotebookEditCell"` を付与して起動（`ClaudeCliRunner.buildArgs()` で実装済み）。
+  - 実行ディレクトリは必ずチケットの worktree（`context.workDir`）。`AGENT_WORKDIR`（デーモン自身のチェックアウト）は worktree が渡されない場合のフォールバックのみ。
 - **Antigravity CLI (`agy`)**:
   - 利用可能なツール群から書き込み系ツールを除外、またはプロンプト指示による厳格制御。
 
@@ -426,12 +427,14 @@ export interface StepEvaluationResult {
 - **期待効果・検証**:
   - ワークフロー遷移のロジックをエンジンとして単体テスト可能にする
 
-#### 🔹 Phase 4: Dispatcher 統合
+#### 🔹 Phase 4: Dispatcher 統合（実装済み）
 - **実装内容**:
-  - `dispatcher.ts` のハードコードされた遷移ロジックを `WorkflowEngine` に移譲
-  - 複数リポジトリ Worktree や Backlog 同期との結合確認
+  - `dispatcher.ts` は、エージェント実行後に決定キーワード（差し戻し / 人間確認要請の判定を最優先、次に `<!-- DECISION -->`、無ければロール既定値）を解決し、現在ステップの `rules` を `WorkflowEngine.evaluateNextStep()` で評価して次ステップ・`human_gate`・`human_escalation`・`COMPLETE` を決定する
+  - 現在ステップが `workflow.yaml` に存在しない場合（レガシーなカスタム状態名のみ等）に限り、従来のハードコード遷移にフォールバックする
+  - 次ステップを解決できない場合は「コメントのみ投稿して処理中のまま放置」せず、「確認待ち」に倒して停止する
 - **期待効果・検証**:
-  - コードベースの可読性が大幅に向上し、リポジトリごとのカスタム YAML が利用可能になる
+  - `workflows/<PROJECT_KEY>/workflow.yaml` の `rules` / `goto` / `human_gate` が実行時に効くため、プロジェクト固有のステップ追加・遷移変更がコード修正なしで可能
+  - 組み込み 5 役以外の `role` を持つカスタムステップにも汎用プロンプトが生成される
 
 ---
 

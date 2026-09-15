@@ -1,13 +1,10 @@
 import fs from "fs";
 import path from "path";
-import { exec } from "child_process";
-import { promisify } from "util";
 import type { IIssueTracker, TrackedIssue } from "../tracker/types.js";
 import type { GitWorktreeManager } from "../git/worktree.js";
 import type { IGitHubService, PullRequestState } from "../git/github.js";
 import type { JsonlLogger } from "../logger/jsonl.js";
-
-const execAsync = promisify(exec);
+import { runCommand } from "../git/exec.js";
 
 export interface CleanedIssueReport {
   issueKey: string;
@@ -28,17 +25,41 @@ export interface IssueClientLike {
   getIssue(key: string): Promise<unknown>;
 }
 
+export interface ResourceCleanerOptions {
+  /** true の場合、削除・停止を実行せずログ出力のみ行う */
+  dryRun?: boolean;
+}
+
+/**
+ * 「完了」「Closed」等、人間がクローズ済みとみなすステータス名か判定する。
+ * 「処理済み」（AI 全工程完了・人間 PR レビュー待ち）はクローズではない。
+ */
+export function isClosedStatusName(statusName: string): boolean {
+  const norm = (statusName || "").trim().toLowerCase();
+  if (!norm) return false;
+  if (norm.includes("処理済")) return false;
+  return (
+    norm === "完了" ||
+    norm === "closed" ||
+    norm === "complete" ||
+    norm === "completed" ||
+    norm.endsWith("完了")
+  );
+}
+
 export class ResourceCleaner {
   private tracker: IIssueTracker;
   private worktreeManager: GitWorktreeManager;
   private githubService: IGitHubService;
   private logger?: JsonlLogger;
+  private dryRun: boolean;
 
   constructor(
     trackerOrClient: IIssueTracker | IssueClientLike,
     worktreeManager: GitWorktreeManager,
     githubService: IGitHubService,
-    logger?: JsonlLogger
+    logger?: JsonlLogger,
+    options: ResourceCleanerOptions = {}
   ) {
     if (trackerOrClient && "trackerType" in trackerOrClient) {
       this.tracker = trackerOrClient;
@@ -61,18 +82,12 @@ export class ResourceCleaner {
             (typeof rawObj.rawStatusName === "string" ? rawObj.rawStatusName : undefined) ||
             statusObj?.name ||
             "";
-          const isCompleted =
-            statusName === "完了" ||
-            statusName === "closed" ||
-            statusName === "complete" ||
-            statusName === "completed" ||
-            statusName.endsWith("完了");
           return {
             key: (typeof rawObj.issueKey === "string" ? rawObj.issueKey : undefined) || key,
             title: (typeof rawObj.summary === "string" ? rawObj.summary : undefined) || (typeof rawObj.title === "string" ? rawObj.title : "") || "",
             rawTitle: (typeof rawObj.summary === "string" ? rawObj.summary : undefined) || (typeof rawObj.rawTitle === "string" ? rawObj.rawTitle : "") || "",
             description: typeof rawObj.description === "string" ? rawObj.description : "",
-            lifecycleState: isCompleted ? "completed" : "in_progress",
+            lifecycleState: isClosedStatusName(statusName) ? "closed" : "in_progress",
             rawStatusName: statusName,
             recentComments: [],
             isInvestigation: false,
@@ -102,20 +117,27 @@ export class ResourceCleaner {
     this.worktreeManager = worktreeManager;
     this.githubService = githubService;
     this.logger = logger;
+    this.dryRun = Boolean(options.dryRun);
+  }
+
+  isDryRun(): boolean {
+    return this.dryRun;
   }
 
   /**
-   * ステータス名から完了状態かを判定する
+   * ステータス名から「人間がクローズ済み」かを判定する（「処理済み」は含まない）
    */
   isCompletedStatus(statusName: string): boolean {
-    const norm = statusName.trim().toLowerCase();
-    return (
-      norm === "完了" ||
-      norm === "closed" ||
-      norm === "complete" ||
-      norm === "completed" ||
-      norm.endsWith("完了")
-    );
+    return isClosedStatusName(statusName);
+  }
+
+  /**
+   * チケットがリソース掃除の対象となる終了状態（人間がクローズ済み）かを判定する。
+   * `lifecycleState === "completed"` は「AI 全工程完了・人間 PR レビュー待ち」なので対象外。
+   */
+  isIssueClosed(issue: TrackedIssue): boolean {
+    if (issue.lifecycleState === "closed") return true;
+    return isClosedStatusName(issue.rawStatusName || "");
   }
 
   /**
@@ -157,8 +179,13 @@ export class ResourceCleaner {
     for (const file of composeFiles) {
       const composeDir = path.dirname(file);
       try {
+        if (this.dryRun) {
+          console.log(`[Cleaner] (DRY_RUN) Docker Compose 停止をスキップ: ${file}`);
+          stoppedFiles.push(file);
+          continue;
+        }
         console.log(`[Cleaner] 🛑 Docker Compose コンテナを停止中: ${file}`);
-        await execAsync(`docker compose -f "${file}" down -v --remove-orphans`, {
+        await runCommand("docker", ["compose", "-f", file, "down", "-v", "--remove-orphans"], {
           cwd: composeDir,
         });
         stoppedFiles.push(file);
@@ -174,16 +201,33 @@ export class ResourceCleaner {
   }
 
   /**
-   * aidevflow/worktrees 配下のパスで起動されたまま残っている孤児 Docker Compose プロジェクトを停止・削除する
+   * 指定パスがこのデーモンの worktrees ディレクトリ配下かを判定する
+   */
+  private isUnderManagedWorktrees(dir: string): boolean {
+    const root = path.resolve(this.worktreeManager.getWorktreesDir());
+    const resolved = path.resolve(dir);
+    return resolved === root || resolved.startsWith(root + path.sep);
+  }
+
+  /**
+   * このデーモンの worktrees 配下のパスで起動されたまま残っている孤児 Docker Compose プロジェクトを停止・削除する。
+   *
+   * 安全ルール:
+   *  - 対象は `getWorktreesDir()` 配下の working_dir を持つプロジェクトのみ（ホスト上の無関係なスタックや
+   *    別ユーザー / 別プロジェクトの aidevflow の worktree は触らない）
+   *  - チケット照会に失敗した場合は「掃除しない」（削除は取り消せないため、判断不能時は保護側に倒す）
    */
   async cleanOrphanDockerContainers(inFlightIssues: Set<string> = new Set()): Promise<string[]> {
     const stoppedProjects: string[] = [];
     try {
-      const { stdout } = await execAsync(
-        'docker ps --filter "label=com.docker.compose.project" --format "{{.ID}}\t{{index .Labels \\"com.docker.compose.project\\"}}\t{{index .Labels \\"com.docker.compose.project.working_dir\\"}}"'
-      );
+      const { stdout } = await runCommand("docker", [
+        "ps",
+        "--filter", "label=com.docker.compose.project",
+        "--format", '{{.ID}}\t{{index .Labels "com.docker.compose.project"}}\t{{index .Labels "com.docker.compose.project.working_dir"}}',
+      ]);
       if (!stdout.trim()) return stoppedProjects;
 
+      const worktreesRoot = path.resolve(this.worktreeManager.getWorktreesDir());
       const lines = stdout.trim().split("\n");
       const projectMap = new Map<string, { workingDir: string; issueKey?: string }>();
 
@@ -193,12 +237,13 @@ export class ResourceCleaner {
         const projectName = parts[1]?.trim();
         const workingDir = parts[2]?.trim();
         if (!projectName || !workingDir) continue;
+        if (!this.isUnderManagedWorktrees(workingDir)) continue;
 
-        const match = workingDir.match(/[/\\]worktrees[/\\]([^/\\]+)/);
-        if (match) {
-          const issueKey = match[1];
-          projectMap.set(projectName, { workingDir, issueKey });
-        }
+        // <worktreesRoot>/<issueKey>/... からチケットキーを取り出す
+        const rel = path.relative(worktreesRoot, path.resolve(workingDir));
+        const issueKey = rel.split(path.sep)[0];
+        if (!issueKey || issueKey === ".." || issueKey === "") continue;
+        projectMap.set(projectName, { workingDir, issueKey });
       }
 
       for (const [projectName, { workingDir, issueKey }] of projectMap.entries()) {
@@ -213,19 +258,23 @@ export class ResourceCleaner {
         } else if (issueKey) {
           try {
             const issue = await this.tracker.getIssue(issueKey);
-            const statusName = issue.rawStatusName || "";
-            if (issue.lifecycleState === "completed" || this.isCompletedStatus(statusName)) {
-              shouldClean = true;
-            }
-          } catch {
-            shouldClean = true;
+            shouldClean = this.isIssueClosed(issue);
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[Cleaner] チケット ${issueKey} の照会に失敗したため Docker プロジェクト ${projectName} は保護します:`, msg);
+            shouldClean = false;
           }
         }
 
         if (shouldClean) {
+          if (this.dryRun) {
+            console.log(`[Cleaner] (DRY_RUN) 孤児 Docker Compose プロジェクトの停止をスキップ: ${projectName}`);
+            stoppedProjects.push(projectName);
+            continue;
+          }
           console.log(`[Cleaner] 🛑 孤児 Docker Compose プロジェクトを停止・破棄中: ${projectName}`);
           try {
-            await execAsync(`docker compose -p "${projectName}" down -v --remove-orphans`);
+            await runCommand("docker", ["compose", "-p", projectName, "down", "-v", "--remove-orphans"]);
             stoppedProjects.push(projectName);
             console.log(`[Cleaner] ✅ 孤児 Docker Compose 停止完了: ${projectName}`);
           } catch (err: unknown) {
@@ -242,7 +291,7 @@ export class ResourceCleaner {
   }
 
   /**
-   * 完了済みかつPRがclose/mergedのチケットのworktreeとDockerコンテナを一括クリーンアップ
+   * 人間がクローズ済み（完了）かつ PR が closed/merged のチケットの worktree と Docker コンテナを一括クリーンアップ
    */
   async cleanupCompletedIssues(
     inFlightIssues: Set<string> = new Set(),
@@ -281,20 +330,17 @@ export class ResourceCleaner {
         continue;
       }
 
-      const isDone =
-        issue.lifecycleState === "completed" ||
-        this.isCompletedStatus(issue.rawStatusName || "");
-
-      if (!isDone) {
-        // 未完了のチケット（未対応、処理中、確認待ち、要件レビュー中、処理済み等）は絶対にスキップ
+      if (!this.isIssueClosed(issue)) {
+        // 未クローズのチケット（未対応、処理中、確認待ち、要件レビュー中、処理済み = PR レビュー待ち 等）は絶対にスキップ
         summary.skippedCount++;
         continue;
       }
 
       // 3. GitHub PR の状態を確認
+      //    OPEN → 保護。UNKNOWN（gh 失敗・未認証等）→ 判断不能なので保護。
+      //    NOT_FOUND（PR なし: 調査タスク等）/ CLOSED / MERGED → 掃除可
       const worktreeDirs = this.worktreeManager.getIssueWorktreeDirs(issueKey);
-      let allPrsClosed = true;
-      let hasOpenPr = false;
+      let blockedReason: string | null = null;
 
       for (const target of worktreeDirs) {
         let prState: PullRequestState = "UNKNOWN";
@@ -305,33 +351,41 @@ export class ResourceCleaner {
         }
 
         if (prState === "OPEN") {
-          hasOpenPr = true;
-          allPrsClosed = false;
+          blockedReason = `PR が OPEN 中 (${target.repoName})`;
+          break;
+        }
+        if (prState === "UNKNOWN") {
+          blockedReason = `PR 状態を確認できません (${target.repoName})`;
           break;
         }
       }
 
-      // PR がオープン中の場合はクリーンアップしてはいけない
-      if (hasOpenPr || !allPrsClosed) {
-        console.log(`[Cleaner] ${issueKey}: チケットは完了ですがPRがOPEN中のためクリーンアップをスキップします`);
+      if (blockedReason) {
+        console.log(`[Cleaner] ${issueKey}: チケットは完了ですが ${blockedReason} のためクリーンアップをスキップします`);
         summary.skippedCount++;
         continue;
       }
 
       // 4. クリーンアップ実行（Docker停止 -> Worktree削除）
-      console.log(`[Cleaner] 🧹 チケット ${issueKey} のクリーンアップを開始します (BTS: 完了, PR: closed/merged)`);
-
       const issueBaseDir = path.join(this.worktreeManager.getWorktreesDir(), issueKey);
-      const stoppedDocker = await this.stopDockerCompose(issueBaseDir);
       const removedDirs = worktreeDirs.map((t) => t.worktreeDir);
 
+      if (this.dryRun) {
+        console.log(`[Cleaner] (DRY_RUN) チケット ${issueKey} のクリーンアップをスキップ (対象: ${removedDirs.join(", ") || issueBaseDir})`);
+        summary.skippedCount++;
+        continue;
+      }
+
+      console.log(`[Cleaner] 🧹 チケット ${issueKey} のクリーンアップを開始します (BTS: 完了, PR: closed/merged/none)`);
+
+      const stoppedDocker = await this.stopDockerCompose(issueBaseDir);
       await this.worktreeManager.removeIssueWorktrees(issueKey);
 
       const report: CleanedIssueReport = {
         issueKey,
         stoppedDockerServices: stoppedDocker,
         removedWorktreeDirs: removedDirs,
-        reason: "Ticket completed and PR closed/merged",
+        reason: "Ticket closed and PR closed/merged",
       };
 
       summary.cleanedCount++;

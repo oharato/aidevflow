@@ -1,0 +1,66 @@
+# =============================================================================
+# aidevflow チーム共通設定 (Git にコミットする。秘密情報・個人差のある値は書かない)
+#
+#   読み込み優先順位 (後勝ち):
+#     コード既定値 < config.yml (このファイル) < config.local.yml (個人・マシン固有) < 環境変数
+#
+#   - 秘密情報 (BACKLOG_API_KEY 等) …………… .env にだけ書く
+#   - スペースID / プロジェクトキー / 配置パス … config.local.yml に書く (config.local.yml.example を参照)
+#   - ここに書くのは「チーム全員に共通で、公開しても差し支えない」値だけ
+#
+#   全項目の一覧と説明: docs/setup_guide.md
+# =============================================================================
+
+tracker:
+  # backlog / mock / github(準備中)
+  type: backlog
+  backlog:
+    domain: backlog.jp
+  filter:
+    # 担当者が自分 (BACKLOG_API_KEY の所有者) のチケットのみ処理する。
+    # 共用 VM で各開発者が自分のデーモンを動かす「個人用デーモン」運用の既定値 (docs/deployment_topology.md)
+    only_assigned_to_me: true
+    # target_issue_type: AI開発
+    # target_category: AIパイプライン
+    # require_ai_tag: false
+
+agent:
+  # claude / agy / mock
+  runner: claude
+  # 1 ステップあたりのタイムアウト (20m / 90s / 1h)
+  timeout: 20m
+  claude:
+    # claude --model に渡すモデル名 (未指定なら CLI の既定)
+    # model: claude-sonnet-5
+  agy:
+    model: gemini-3.8-flash-high
+    review_model: gemini-3.8-flash-medium
+    effort: low
+
+daemon:
+  poll_interval_sec: 10
+  # 同時並行チケット数。個人用デーモンが同じ VM に N 台並ぶ場合は VM 全体で 2×N 以下になるよう調整
+  max_concurrency: 2
+  # レビュー差し戻しの連続上限 (到達で「確認待ち」に変更して停止)
+  max_rejection_count: 3
+  # 準備エラー (リポジトリ未記載 / git clone 失敗 等) の連続上限 (到達で「確認待ち」に変更して停止)
+  max_consecutive_failures: 5
+  # 設計レビュー後に人間の承認 ([設計承認待ち]) を必須にする
+  require_human_spec_approval: false
+  # true なら push / PR 作成 / 削除を実行せずシミュレーションのみ
+  dry_run: false
+  log_file_path: logs/aidevflow.jsonl
+
+paths:
+  # 宣言的ワークフロー定義 (workflow.yaml / prompts) の配置ディレクトリ
+  workflows_dir: workflows
+  # home / default_repo_path は個人差があるので config.local.yml で指定する
+
+quota:
+  lock_file_path: .aidevflow.quota.lock
+  probe_interval_sec: 300
+  auto_resume: true
+
+cleanup:
+  # 「完了」(人間がクローズ) かつ PR closed/merged のチケットの worktree / Docker を掃除する間隔 (分)
+  interval_minutes: 30

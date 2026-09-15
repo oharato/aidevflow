@@ -11,6 +11,7 @@
 - 🛡️ **[トラブルシューティング & エスカレーション仕様書](troubleshooting.md)** (ループ防止・クォータ停止・プロセスロック)
 - 🎼 **[宣言的ワークフローエンジン & 権限制御設計書](declarative_workflow_engine_design.md)** (YAML定義・決定キーワード・edit:false多層防御)
 - 🧩 **[Issue Tracker (BTS) 抽象化設計書](issue_tracker_abstraction.md)** (BTS抽象化・BacklogAdapter・MockTracker)
+- 👥 **[デーモン配置設計書](deployment_topology.md)** (個人用デーモン vs チーム用デーモン・担当者フィルタ)
 
 ---
 

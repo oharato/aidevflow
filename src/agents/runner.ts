@@ -14,6 +14,24 @@ import type {
 import { buildAgentPrompt } from "./prompts.js";
 import { parseResetDuration } from "../daemon/quota-lock.js";
 import { parseDecision } from "../workflow/decision.js";
+import { getDisallowedToolsArgs } from "../workflow/permission.js";
+
+/**
+ * "20m" / "90s" / "1h" 形式のタイムアウト文字列をミリ秒に変換する（不正値は 0 = 無制限）
+ */
+export function parseDurationToMs(value: string | undefined): number {
+  if (!value) return 0;
+  const m = value.trim().match(/^(\d+)\s*(ms|s|m|h)?$/i);
+  if (!m) return 0;
+  const n = Number(m[1]);
+  switch ((m[2] || "s").toLowerCase()) {
+    case "ms": return n;
+    case "s": return n * 1000;
+    case "m": return n * 60 * 1000;
+    case "h": return n * 60 * 60 * 1000;
+    default: return 0;
+  }
+}
 
 /**
  * agy -p "/usage" --output-format json の出力をパースして構造化する
@@ -207,7 +225,10 @@ export class AgyRunner implements IAgentRunner {
       });
 
       // デーモン終了・停止時に agy 子プロセスを確実に道連れ終了させる安全ハンドラ
+      // （中断フラグを立て、呼び出し側が「異常終了」と誤判定してエスカレーションしないようにする）
+      let interrupted = false;
       const cleanupChild = () => {
+        interrupted = true;
         if (!child.killed) {
           try {
             child.kill("SIGTERM");
@@ -316,18 +337,24 @@ export class AgyRunner implements IAgentRunner {
 
         resolve({
           role,
-          success: code === 0,
-          summary: `エージェント [${role}] が実行されました (終了コード: ${code})`,
+          success: code === 0 && !interrupted,
+          summary: interrupted
+            ? `エージェント [${role}] はデーモン停止により中断されました`
+            : `エージェント [${role}] が実行されました (終了コード: ${code})`,
           isRejection,
           output: outputText,
           usage: parsedUsage,
           durationSeconds: totalDurationSec,
           decision: parsedDec,
+          interrupted,
         });
       });
 
       child.on("error", (err) => {
         clearInterval(heartbeatTimer);
+        process.off("SIGINT", cleanupChild);
+        process.off("SIGTERM", cleanupChild);
+        process.off("exit", cleanupChild);
         console.error(`[AgyRunner] Failed to spawn agy CLI:`, err);
         reject(err);
       });
@@ -470,21 +497,67 @@ export class AgyRunner implements IAgentRunner {
  */
 export class ClaudeCliRunner implements IAgentRunner {
   private workDir: string;
+  private timeoutMs: number;
+  private model?: string;
 
-  constructor(workDir: string = process.cwd()) {
+  constructor(workDir: string = process.cwd(), timeout: string = "20m", model?: string) {
     this.workDir = workDir;
+    this.timeoutMs = parseDurationToMs(timeout);
+    this.model = model;
+  }
+
+  /**
+   * claude CLI に渡す引数を組み立てる（テスト容易性のため分離）
+   * - 非対話 (-p) + 権限プロンプト省略
+   * - edit: false ステップでは第 2 層防御として編集系ツールを CLI レベルで禁止
+   */
+  buildArgs(prompt: string, context: AgentContext): string[] {
+    const args = ["-p", prompt, "--dangerously-skip-permissions"];
+    if (context.readOnly) {
+      args.push(...getDisallowedToolsArgs(false, "claude"));
+    }
+    if (this.model) {
+      args.push("--model", this.model);
+    }
+    return args;
   }
 
   async run(role: AgentRole, context: AgentContext): Promise<AgentResult> {
     const prompt = buildAgentPrompt(role, context);
-    console.log(`[ClaudeCliRunner] Spawning Claude Code CLI for role: ${role}...`);
+    // 必ずチケットの worktree で実行する（デーモン自身のチェックアウトを編集しないように）
+    const runCwd = context.workDir || this.workDir;
+    console.log(`[ClaudeCliRunner] Spawning Claude Code CLI for role: ${role}... (cwd: ${runCwd}, readOnly: ${Boolean(context.readOnly)})`);
 
     return new Promise<AgentResult>((resolve, reject) => {
-      const child = spawn("claude", ["-p", prompt], {
-        cwd: this.workDir,
+      const child = spawn("claude", this.buildArgs(prompt, context), {
+        cwd: runCwd,
         env: { ...process.env },
         stdio: ["ignore", "pipe", "pipe"],
       });
+
+      let interrupted = false;
+      let timedOut = false;
+      const cleanupChild = () => {
+        interrupted = true;
+        if (!child.killed) {
+          try {
+            child.kill("SIGTERM");
+          } catch {}
+        }
+      };
+      process.once("SIGINT", cleanupChild);
+      process.once("SIGTERM", cleanupChild);
+      process.once("exit", cleanupChild);
+
+      const timeoutTimer = this.timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            console.error(`[ClaudeCliRunner] タイムアウト (${this.timeoutMs / 1000}秒) のため claude プロセスを停止します`);
+            try {
+              child.kill("SIGTERM");
+            } catch {}
+          }, this.timeoutMs)
+        : null;
 
       let stdout = "";
       let stderr = "";
@@ -501,24 +574,50 @@ export class ClaudeCliRunner implements IAgentRunner {
         process.stderr.write(`[Claude:ERR] ${text}`);
       });
 
+      const detach = () => {
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        process.off("SIGINT", cleanupChild);
+        process.off("SIGTERM", cleanupChild);
+        process.off("exit", cleanupChild);
+      };
+
       child.on("close", (code) => {
+        detach();
         if (code !== 0) {
           console.error(`[ClaudeCliRunner] Claude process exited with code ${code}`);
         }
-        const fullOutput = stdout || stderr;
+        let fullOutput = (stdout || "").trim();
+        if (code !== 0 && stderr.trim()) {
+          fullOutput = `${fullOutput}\n\nエラー詳細:\n${stderr.slice(0, 1000)}`.trim();
+        }
+        if (timedOut) {
+          fullOutput = `[エラー] エージェント [${role}] がタイムアウトしました (${this.timeoutMs / 1000}秒)。\n${fullOutput}`.trim();
+        }
+        if (!fullOutput) {
+          fullOutput = code === 0
+            ? `エージェント [${role}] の処理が完了しました。`
+            : `[エラー] エージェント [${role}] が異常終了しました (終了コード: ${code})`;
+        }
+        if (fullOutput.length > 7000) {
+          fullOutput = fullOutput.slice(0, 7000) + "\n\n...[長文のため以降省略]...";
+        }
         const parsedDec = parseDecision(fullOutput, role);
         const isRejection = parsedDec.keyword === "REJECTED";
         resolve({
           role,
-          success: code === 0,
-          summary: `エージェント [${role}] が実行されました (終了コード: ${code})`,
+          success: code === 0 && !interrupted && !timedOut,
+          summary: interrupted
+            ? `エージェント [${role}] はデーモン停止により中断されました`
+            : `エージェント [${role}] が実行されました (終了コード: ${code})`,
           isRejection,
           output: fullOutput,
           decision: parsedDec,
+          interrupted,
         });
       });
 
       child.on("error", (err) => {
+        detach();
         console.error(`[ClaudeCliRunner] Failed to spawn claude CLI:`, err);
         reject(err);
       });
