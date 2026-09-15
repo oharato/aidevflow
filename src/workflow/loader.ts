@@ -5,6 +5,7 @@ import type {
   WorkflowDefinition,
   WorkflowStep,
   WorkflowRule,
+  DecisionKeyword,
 } from "./types.js";
 
 export interface WorkflowResolveOptions {
@@ -44,7 +45,10 @@ export const BUILTIN_DEFAULT_WORKFLOW: WorkflowDefinition = {
       name: "spec-writer",
       role: "spec-writer",
       title: "詳細仕様策定",
+      tracker_tag: "[詳細設計中]",
+      step_tag: "[詳細設計中]",
       backlog_tag: "[詳細設計中]",
+      status_name: "詳細設計",
       custom_status: "詳細設計",
       edit: true,
       rules: [
@@ -57,7 +61,10 @@ export const BUILTIN_DEFAULT_WORKFLOW: WorkflowDefinition = {
       name: "spec-reviewer",
       role: "spec-reviewer",
       title: "詳細仕様レビュー",
+      tracker_tag: "[設計レビュー中]",
+      step_tag: "[設計レビュー中]",
       backlog_tag: "[設計レビュー中]",
+      status_name: "設計レビュー",
       custom_status: "設計レビュー",
       edit: false,
       rules: [
@@ -71,7 +78,10 @@ export const BUILTIN_DEFAULT_WORKFLOW: WorkflowDefinition = {
       name: "developer",
       role: "developer",
       title: "コード実装・テスト・PR作成",
+      tracker_tag: "[実装中]",
+      step_tag: "[実装中]",
       backlog_tag: "[実装中]",
+      status_name: "実装",
       custom_status: "実装",
       edit: true,
       rules: [
@@ -84,7 +94,10 @@ export const BUILTIN_DEFAULT_WORKFLOW: WorkflowDefinition = {
       name: "code-reviewer",
       role: "code-reviewer",
       title: "技術観点レビュー",
+      tracker_tag: "[技術レビュー中]",
+      step_tag: "[技術レビュー中]",
       backlog_tag: "[技術レビュー中]",
+      status_name: "技術レビュー",
       custom_status: "技術レビュー",
       edit: false,
       rules: [
@@ -98,7 +111,10 @@ export const BUILTIN_DEFAULT_WORKFLOW: WorkflowDefinition = {
       name: "requirement-reviewer",
       role: "requirement-reviewer",
       title: "要件充足度レビュー",
+      tracker_tag: "[要件レビュー中]",
+      step_tag: "[要件レビュー中]",
       backlog_tag: "[要件レビュー中]",
+      status_name: "要件レビュー",
       custom_status: "要件レビュー",
       edit: false,
       rules: [
@@ -159,70 +175,91 @@ export function loadWorkflow(input: string | WorkflowResolveOptions): WorkflowDe
 
   try {
     const content = fs.readFileSync(targetPath, "utf-8");
-    const raw = YAML.parse(content);
+    const raw: unknown = YAML.parse(content);
     return validateAndNormalizeWorkflow(raw, targetPath);
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
     console.error(`[WorkflowLoader] ワークフローYAMLパースエラー (${targetPath}):`, err);
-    throw new Error(`ワークフロー定義の読み込みに失敗しました (${targetPath}): ${err.message}`);
+    throw new Error(`ワークフロー定義の読み込みに失敗しました (${targetPath}): ${errMsg}`);
   }
 }
 
 /**
  * 読み込んだオブジェクトの検証と正規化
  */
-export function validateAndNormalizeWorkflow(raw: any, sourcePath?: string): WorkflowDefinition {
+export function validateAndNormalizeWorkflow(raw: unknown, sourcePath?: string): WorkflowDefinition {
   if (!raw || typeof raw !== "object") {
     throw new Error(`無効なワークフロー形式です: ${sourcePath || "unknown"}`);
   }
 
-  if (!raw.name || typeof raw.name !== "string") {
+  const rawObj = raw as Record<string, unknown>;
+
+  if (!rawObj.name || typeof rawObj.name !== "string") {
     throw new Error(`ワークフローの name が指定されていません: ${sourcePath}`);
   }
 
-  if (!raw.steps || typeof raw.steps !== "object") {
+  if (!rawObj.steps || typeof rawObj.steps !== "object") {
     throw new Error(`ワークフローの steps が定義されていません: ${sourcePath}`);
   }
 
-  const initialStep = raw.initial_step || Object.keys(raw.steps)[0];
-  if (!raw.steps[initialStep]) {
+  const rawSteps = rawObj.steps as Record<string, unknown>;
+  const initialStep = (typeof rawObj.initial_step === "string" ? rawObj.initial_step : "") || Object.keys(rawSteps)[0];
+  if (!rawSteps[initialStep]) {
     throw new Error(`初期ステップ initial_step "${initialStep}" が steps 内に見つかりません: ${sourcePath}`);
   }
 
   const normalizedSteps: Record<string, WorkflowStep> = {};
 
-  for (const [stepKey, stepVal] of Object.entries<any>(raw.steps)) {
-    if (!stepVal || typeof stepVal !== "object") {
+  for (const [stepKey, stepValRaw] of Object.entries(rawSteps)) {
+    if (!stepValRaw || typeof stepValRaw !== "object") {
       throw new Error(`ステップ "${stepKey}" の定義が無効です: ${sourcePath}`);
     }
+    const stepVal = stepValRaw as Record<string, unknown>;
 
     const rules: WorkflowRule[] = Array.isArray(stepVal.rules)
-      ? stepVal.rules.map((r: any) => ({
-          if: r.if,
-          goto: r.goto,
-          human_gate: Boolean(r.human_gate),
-          human_escalation: Boolean(r.human_escalation),
-        }))
+      ? stepVal.rules.map((r: unknown) => {
+          const ruleObj = (r && typeof r === "object" ? r : {}) as Record<string, unknown>;
+          return {
+            if: typeof ruleObj.if === "string" ? (ruleObj.if as DecisionKeyword) : undefined,
+            goto: typeof ruleObj.goto === "string" ? ruleObj.goto : "",
+            human_gate: Boolean(ruleObj.human_gate),
+            human_escalation: Boolean(ruleObj.human_escalation),
+          };
+        })
       : [];
+
+    const trackerTag =
+      (typeof stepVal.tracker_tag === "string" ? stepVal.tracker_tag : undefined) ||
+      (typeof stepVal.step_tag === "string" ? stepVal.step_tag : undefined) ||
+      (typeof stepVal.backlog_tag === "string" ? stepVal.backlog_tag : undefined) ||
+      `[${stepKey}]`;
+    const statusName =
+      (typeof stepVal.status_name === "string" ? stepVal.status_name : undefined) ||
+      (typeof stepVal.custom_status === "string" ? stepVal.custom_status : undefined) ||
+      stepKey;
 
     normalizedSteps[stepKey] = {
       name: stepKey,
-      role: stepVal.role || stepKey,
-      title: stepVal.title || stepKey,
-      backlog_tag: stepVal.backlog_tag || `[${stepKey}]`,
-      custom_status: stepVal.custom_status || stepKey,
+      role: typeof stepVal.role === "string" ? stepVal.role : stepKey,
+      title: typeof stepVal.title === "string" ? stepVal.title : stepKey,
+      tracker_tag: trackerTag,
+      step_tag: trackerTag,
+      backlog_tag: trackerTag,
+      status_name: statusName,
+      custom_status: statusName,
       edit: typeof stepVal.edit === "boolean" ? stepVal.edit : true,
-      model: stepVal.model,
-      effort: stepVal.effort,
-      instruction: stepVal.instruction,
+      model: typeof stepVal.model === "string" ? stepVal.model : undefined,
+      effort: typeof stepVal.effort === "string" ? (stepVal.effort as WorkflowStep["effort"]) : undefined,
+      instruction: typeof stepVal.instruction === "string" ? stepVal.instruction : undefined,
       rules,
     };
   }
 
   return {
-    name: raw.name,
-    description: raw.description,
+    name: rawObj.name,
+    description: typeof rawObj.description === "string" ? rawObj.description : undefined,
     initial_step: initialStep,
-    max_steps: typeof raw.max_steps === "number" ? raw.max_steps : 20,
+    max_steps: typeof rawObj.max_steps === "number" ? rawObj.max_steps : 20,
     steps: normalizedSteps,
   };
 }

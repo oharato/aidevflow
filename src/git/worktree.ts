@@ -276,8 +276,9 @@ export class GitWorktreeManager {
             console.log(`[GitWorktree] worktree を削除中: ${target.worktreeDir}`);
             await execAsync(`git worktree remove --force "${target.worktreeDir}"`, { cwd: target.repoPath }).catch(() => {});
             await execAsync(`git worktree prune`, { cwd: target.repoPath }).catch(() => {});
-          } catch (err: any) {
-            console.warn(`[GitWorktree] worktree 削除警告 (${target.repoName}):`, err.message);
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[GitWorktree] worktree 削除警告 (${target.repoName}):`, msg);
           }
         });
       }
@@ -287,7 +288,8 @@ export class GitWorktreeManager {
       try {
         fs.rmSync(issueBaseDir, { recursive: true, force: true });
         console.log(`[GitWorktree] チケットディレクトリを完全削除: ${issueBaseDir}`);
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
         // Dockerコンテナがroot権限で作成したファイル等のEACCES対策:
         // Dockerが利用可能な環境であれば、軽量コンテナ（alpine）経由でroot強制クリーンアップを試行
         const parentDir = path.dirname(issueBaseDir);
@@ -298,7 +300,7 @@ export class GitWorktreeManager {
           );
           console.log(`[GitWorktree] Docker経由でチケットディレクトリを完全削除: ${issueBaseDir}`);
         } catch {
-          console.warn(`[GitWorktree] ディレクトリ削除警告 (${issueBaseDir}):`, err.message);
+          console.warn(`[GitWorktree] ディレクトリ削除警告 (${issueBaseDir}):`, errMsg);
         }
       }
     }

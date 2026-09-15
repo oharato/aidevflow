@@ -1,11 +1,12 @@
-import type { BacklogClient } from "../backlog/client.js";
+import type { IIssueTracker, TrackedIssue } from "../tracker/types.js";
+import { wrapLegacyIssueClient } from "../tracker/factory.js";
+import type { WorkflowStep } from "../workflow/types.js";
+import { loadWorkflow } from "../workflow/loader.js";
 import type { AgentDispatcher } from "./dispatcher.js";
-import type { BacklogStatus, BacklogIssue } from "../backlog/types.js";
 import type { JsonlLogger } from "../logger/jsonl.js";
 import { QuotaLockManager, type QuotaLockMetadata } from "./quota-lock.js";
 import type { QuotaProbeResult, AgentRole } from "../agents/types.js";
 import { TokenUsageTracker } from "../agents/runner.js";
-import { PHASE_TAGS, formatSummaryWithPhase } from "../backlog/prefix-helper.js";
 import { ResourceCleaner } from "./cleaner.js";
 
 export interface PollerFilterOptions {
@@ -14,8 +15,8 @@ export interface PollerFilterOptions {
   requireAiTag?: boolean;
 }
 
-export class BacklogPoller {
-  private backlog: BacklogClient;
+export class IssuePoller {
+  private tracker: IIssueTracker;
   private dispatcher: AgentDispatcher;
   private projectKey: string;
   private targetIssueKey?: string;
@@ -25,8 +26,6 @@ export class BacklogPoller {
   private isPolling: boolean = false;
   private inFlightIssues: Set<string> = new Set();
   private activeTasks: Map<string, Promise<void>> = new Map();
-  private projectId: number | null = null;
-  private projectStatuses: BacklogStatus[] = [];
   private issueStatusCache: Map<string, string> = new Map();
   private logger?: JsonlLogger;
   private filterOptions?: PollerFilterOptions;
@@ -39,7 +38,7 @@ export class BacklogPoller {
   private lastCleanupAt: number;
 
   constructor(
-    backlog: BacklogClient,
+    trackerOrClient: IIssueTracker | object,
     dispatcher: AgentDispatcher,
     projectKey: string,
     targetIssueKey?: string,
@@ -53,8 +52,11 @@ export class BacklogPoller {
     cleaner?: ResourceCleaner,
     cleanupIntervalMinutes?: number
   ) {
-    this.backlog = backlog;
+    this.tracker = wrapLegacyIssueClient(trackerOrClient, undefined, projectKey);
     this.dispatcher = dispatcher;
+    if (typeof this.dispatcher.setTracker === "function") {
+      this.dispatcher.setTracker(this.tracker);
+    }
     this.projectKey = projectKey;
     this.targetIssueKey = targetIssueKey;
     this.intervalMs = intervalSec * 1000;
@@ -68,7 +70,7 @@ export class BacklogPoller {
     this.cleaner =
       cleaner ||
       new ResourceCleaner(
-        this.backlog,
+        this.tracker,
         dispatcher.getWorktreeManager(),
         dispatcher.getGitHubService(),
         this.logger
@@ -86,7 +88,7 @@ export class BacklogPoller {
   }
 
   async runCleanupNow(): Promise<void> {
-    await this.cleaner.cleanupCompletedIssues(this.inFlightIssues, this.projectStatuses);
+    await this.cleaner.cleanupCompletedIssues(this.inFlightIssues);
   }
 
   getQuotaLockManager(): QuotaLockManager {
@@ -111,17 +113,12 @@ export class BacklogPoller {
   }
 
   async init(): Promise<void> {
-    const project = await this.backlog.getProject(this.projectKey);
-    this.projectId = project.id;
-    console.log(`[Poller] プロジェクト取得成功: "${project.name}" (ID: ${project.id})`);
+    await this.tracker.init();
+    console.log(`[Poller] トラッカー初期化成功 (${this.tracker.trackerType})`);
 
-    this.projectStatuses = await this.backlog.getProjectStatuses(project.id);
-    console.log(`[Poller] 登録ステータス一覧:`);
-    this.projectStatuses.forEach((st) => {
-      console.log(`  - [ID: ${st.id}] "${st.name}" (色: ${st.color})`);
-    });
-
-    const isCustom = this.dispatcher.isCustomStatusMode(this.projectStatuses);
+    const isCustom = this.tracker.isCustomStatusMode
+      ? this.tracker.isCustomStatusMode()
+      : this.dispatcher.isCustomStatusMode();
     if (isCustom) {
       console.log(`[Poller] 動作モード: 【カスタム状態モード】（詳細設計中 / 実装中 等を使用）`);
     } else {
@@ -156,13 +153,15 @@ export class BacklogPoller {
       await this.init();
       // 起動時初回クリーンアップ（停止中に完了・マージされたチケットのリソースや孤児コンテナを非同期でお掃除）
       this.cleaner
-        .cleanupCompletedIssues(this.inFlightIssues, this.projectStatuses)
-        .catch((err) => {
-          console.warn(`[Poller] 起動時リソースクリーンアップで例外: ${err.message}`);
+        .cleanupCompletedIssues(this.inFlightIssues)
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(`[Poller] 起動時リソースクリーンアップで例外: ${msg}`);
         });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
       console.error(`[Poller] 初期化エラー (プロジェクトまたはステータス取得失敗):`, err);
-      this.logger?.error("error", `初期化エラー: ${err.message}`);
+      this.logger?.error("error", `初期化エラー: ${errMsg}`);
       throw err;
     }
 
@@ -179,14 +178,16 @@ export class BacklogPoller {
         if (now - this.lastCleanupAt >= this.cleanupIntervalMs) {
           this.lastCleanupAt = now;
           this.cleaner
-            .cleanupCompletedIssues(this.inFlightIssues, this.projectStatuses)
-            .catch((err) => {
-              console.warn(`[Poller] 定期リソースクリーンアップで例外: ${err.message}`);
+            .cleanupCompletedIssues(this.inFlightIssues)
+            .catch((cleanupErr: unknown) => {
+              const msg = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+              console.warn(`[Poller] 定期リソースクリーンアップで例外: ${msg}`);
             });
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
         console.error(`[Poller] ポーリングエラー:`, err);
-        this.logger?.error("error", `ポーリング例外: ${err.message}`);
+        this.logger?.error("error", `ポーリング例外: ${errMsg}`);
       }
       await this.sleep(this.intervalMs);
     }
@@ -200,9 +201,10 @@ export class BacklogPoller {
 
     // 停止時リソースクリーンアップ
     try {
-      await this.cleaner.cleanupCompletedIssues(this.inFlightIssues, this.projectStatuses);
-    } catch (err: any) {
-      console.warn(`[Poller] 停止時リソースクリーンアップで例外: ${err.message}`);
+      await this.cleaner.cleanupCompletedIssues(this.inFlightIssues);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`[Poller] 停止時リソースクリーンアップで例外: ${errMsg}`);
     }
 
     this.logger?.info("daemon_stop", `デーモン停止`);
@@ -210,10 +212,6 @@ export class BacklogPoller {
 
   async pollOnce(waitForCompletion: boolean = true): Promise<void> {
     if (this.isPolling) {
-      return;
-    }
-
-    if (!this.projectId) {
       return;
     }
 
@@ -225,75 +223,55 @@ export class BacklogPoller {
 
     this.isPolling = true;
     try {
-      let issuesToScan: BacklogIssue[] = [];
+      let issuesToScan: TrackedIssue[] = [];
+      let actionableIssues: TrackedIssue[] = [];
 
+      const workflowDef = loadWorkflow({ projectKey: this.projectKey });
       if (this.targetIssueKey) {
-        const singleIssue = await this.backlog.getIssue(this.targetIssueKey);
+        const singleIssue = await this.tracker.getIssue(this.targetIssueKey, workflowDef);
         issuesToScan = [singleIssue];
+        if (singleIssue.lifecycleState === "in_progress" && singleIssue.currentStepName) {
+          actionableIssues = [singleIssue];
+        }
       } else {
-        issuesToScan = await this.backlog.getIssues({
-          projectId: [this.projectId],
-          sort: "updated",
-          order: "asc",
-          count: 50,
-        });
+        if (typeof this.tracker.fetchCandidateIssues === "function") {
+          issuesToScan = await this.tracker.fetchCandidateIssues(workflowDef, this.filterOptions);
+          actionableIssues = issuesToScan.filter(
+            (i) => i.lifecycleState === "in_progress" && Boolean(i.currentStepName)
+          );
+        } else {
+          actionableIssues = await this.tracker.fetchActionableIssues(workflowDef, this.filterOptions);
+          issuesToScan = actionableIssues;
+        }
       }
 
-      const isCustom = this.dispatcher.isCustomStatusMode(this.projectStatuses);
-
-      const actionableIssues = issuesToScan.filter((issue) => {
-        // 1. 種別 (Issue Type) フィルター
-        if (this.filterOptions?.targetIssueType) {
-          if (issue.issueType.name !== this.filterOptions.targetIssueType) {
-            return false;
-          }
-        }
-
-        // 2. カテゴリー (Category) フィルター
-        if (this.filterOptions?.targetCategory) {
-          const hasMatchingCategory = issue.category?.some(
-            (c) => c.name === this.filterOptions!.targetCategory
-          );
-          if (!hasMatchingCategory) {
-            return false;
-          }
-        }
-
-        // 3. 件名 [AI] タグ必須フィルター
-        if (this.filterOptions?.requireAiTag) {
-          const hasTag = /\[AI\]/i.test(issue.summary);
-          if (!hasTag) {
-            return false;
-          }
-        }
-
-        const role = this.dispatcher.resolveRole(issue, this.projectStatuses);
-        return role !== null;
-      });
+      const isCustom = this.dispatcher.isCustomStatusMode();
 
       // 非アクション対象チケットも含め、現在のステータス/件名をキャッシュに追跡（「確認待ち」等）
       for (const issue of issuesToScan) {
-        const isActionable = actionableIssues.some((ai) => ai.issueKey === issue.issueKey);
+        const issueKey = issue.key;
+        const isActionable = actionableIssues.some((ai) => ai.key === issueKey);
         if (!isActionable) {
           const fingerprint = isCustom
-            ? `${issue.status.name}::none::${issue.updated || ""}`
-            : `${issue.status.name}::${issue.summary}::none::${issue.updated || ""}`;
-          this.issueStatusCache.set(issue.issueKey, fingerprint);
+            ? `${issue.rawStatusName}::none::${issue.updatedAt}`
+            : `${issue.rawStatusName}::${issue.rawTitle}::none::${issue.updatedAt}`;
+          this.issueStatusCache.set(issueKey, fingerprint);
         }
       }
 
       // 新規に着手可能なチケットを抽出 (既に実行中のものや前回から変更のないものを除外)
-      const issuesToDispatch: BacklogIssue[] = [];
+      const issuesToDispatch: TrackedIssue[] = [];
       for (const issue of actionableIssues) {
-        if (this.inFlightIssues.has(issue.issueKey)) {
+        const issueKey = issue.key;
+        if (this.inFlightIssues.has(issueKey)) {
           continue; // 既にエージェント実行中
         }
 
-        const role = this.dispatcher.resolveRole(issue, this.projectStatuses);
-        const lastFingerprint = this.issueStatusCache.get(issue.issueKey);
+        const role = this.dispatcher.resolveRole(issue);
+        const lastFingerprint = this.issueStatusCache.get(issueKey);
         const currentFingerprint = isCustom
-          ? `${issue.status.name}::${role || "none"}::${issue.updated || ""}`
-          : `${issue.status.name}::${issue.summary}::${role || "none"}::${issue.updated || ""}`;
+          ? `${issue.rawStatusName}::${role || "none"}::${issue.updatedAt}`
+          : `${issue.rawStatusName}::${issue.rawTitle}::${role || "none"}::${issue.updatedAt}`;
 
         if (lastFingerprint === currentFingerprint) {
           continue; // 変更なし
@@ -316,10 +294,10 @@ export class BacklogPoller {
 
       const launchedPromises: Promise<void>[] = [];
       for (const issue of issuesToDispatch) {
-        const issueKey = issue.issueKey;
+        const issueKey = issue.key;
         this.inFlightIssues.add(issueKey);
 
-        const taskPromise = this.executeIssueTask(issue, isCustom)
+        const taskPromise = this.executeIssueTask(issue)
           .finally(() => {
             this.inFlightIssues.delete(issueKey);
             this.activeTasks.delete(issueKey);
@@ -337,12 +315,18 @@ export class BacklogPoller {
     }
   }
 
-  private async executeIssueTask(issue: BacklogIssue, isCustom: boolean): Promise<void> {
-    const role = this.dispatcher.resolveRole(issue, this.projectStatuses);
-    const lastFingerprint = this.issueStatusCache.get(issue.issueKey);
+  private async executeIssueTask(issue: TrackedIssue): Promise<void> {
+    const issueKey = issue.key;
+    const issueSummary = issue.rawTitle;
+    const statusName = issue.rawStatusName;
+    const updatedAt = issue.updatedAt;
+
+    const isCustom = this.dispatcher.isCustomStatusMode();
+    const role = this.dispatcher.resolveRole(issue);
+    const lastFingerprint = this.issueStatusCache.get(issueKey);
     const currentFingerprint = isCustom
-      ? `${issue.status.name}::${role || "none"}::${issue.updated || ""}`
-      : `${issue.status.name}::${issue.summary}::${role || "none"}::${issue.updated || ""}`;
+      ? `${statusName}::${role || "none"}::${updatedAt || ""}`
+      : `${statusName}::${issueSummary}::${role || "none"}::${updatedAt || ""}`;
 
     // 人間介入後の再開検知: 「確認待ち」からの復帰時、差し戻しカウンターをリセット
     const wasWaitingConfirmation =
@@ -350,29 +334,30 @@ export class BacklogPoller {
       (lastFingerprint.includes("確認待ち") || lastFingerprint.includes("confirmHuman"));
 
     if (wasWaitingConfirmation) {
-      console.log(`[Poller][${issue.issueKey}] 「確認待ち」からの復帰を検知しました。差し戻しカウンターをリセットします`);
-      this.dispatcher.resetRejectionCount(issue.issueKey);
-      this.logger?.info("issue_detected", `人間確認後の自律再開を検知 (カウンターリセット): ${issue.issueKey}`, {
-        issueKey: issue.issueKey,
+      console.log(`[Poller][${issueKey}] 「確認待ち」からの復帰を検知しました。差し戻しカウンターをリセットします`);
+      this.dispatcher.resetRejectionCount(issueKey);
+      this.logger?.info("issue_detected", `人間確認後の自律再開を検知 (カウンターリセット): ${issueKey}`, {
+        issueKey,
         data: { previous: lastFingerprint, current: currentFingerprint },
       });
     }
 
-    console.log(`[Poller][${issue.issueKey}] チケット処理開始: [${issue.summary}] (ステータス: "${issue.status.name}", 担当: [${role}]) [並行実行中: ${this.inFlightIssues.size}/${this.maxConcurrency}]`);
+    console.log(`[Poller][${issueKey}] チケット処理開始: [${issueSummary}] (ステータス: "${statusName}", 担当: [${role}]) [並行実行中: ${this.inFlightIssues.size}/${this.maxConcurrency}]`);
 
     try {
-      const result = await this.dispatcher.processIssue(issue, this.projectStatuses);
+      const result = await this.dispatcher.processIssue(issue);
 
       if (result.handled) {
         const nextFingerprint = isCustom
-          ? `${result.nextStatusTarget || issue.status.name}::${role || "none"}`
-          : `${result.nextStatusTarget || issue.status.name}::${result.newSummary || issue.summary}::${role || "none"}`;
-        this.issueStatusCache.set(issue.issueKey, nextFingerprint);
+          ? `${result.nextStatusTarget || statusName}::${role || "none"}`
+          : `${result.nextStatusTarget || statusName}::${result.newSummary || issueSummary}::${role || "none"}`;
+        this.issueStatusCache.set(issueKey, nextFingerprint);
       }
-      console.log(`[Poller][${issue.issueKey}] チケット処理完了 (結果: ${result.handled ? "成功/更新" : "未処理"})`);
-    } catch (err: any) {
-      console.error(`[Poller][${issue.issueKey}] チケット処理で例外発生:`, err);
-      this.logger?.error("error", `チケット処理例外: ${err.message}`, { issueKey: issue.issueKey });
+      console.log(`[Poller][${issueKey}] チケット処理完了 (結果: ${result.handled ? "成功/更新" : "未処理"})`);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[Poller][${issueKey}] チケット処理で例外発生:`, err);
+      this.logger?.error("error", `チケット処理例外: ${errMsg}`, { issueKey });
     }
   }
 
@@ -398,11 +383,11 @@ export class BacklogPoller {
       if (remainingMs !== null && remainingMs > 0) {
         const remainingMinutes = Math.ceil(remainingMs / 60000);
         console.log(
-          `[Poller] ⏳ クォータ回復待機中 (リセット予定: ${metadata.resetsAt} / 残り 約${remainingMinutes}分)${usageInfo}。Backlog ポーリング休止中... (ロック: ${this.quotaLockManager.getLockFilePath()})`
+          `[Poller] ⏳ クォータ回復待機中 (リセット予定: ${metadata.resetsAt} / 残り 約${remainingMinutes}分)${usageInfo}。チケット ポーリング休止中... (ロック: ${this.quotaLockManager.getLockFilePath()})`
         );
       } else {
         console.log(
-          `[Poller] ⏳ クォータ回復待機中 (定期プローブ中)${usageInfo}。Backlog ポーリング休止中... (ロック: ${this.quotaLockManager.getLockFilePath()})`
+          `[Poller] ⏳ クォータ回復待機中 (定期プローブ中)${usageInfo}。チケット ポーリング休止中... (ロック: ${this.quotaLockManager.getLockFilePath()})`
         );
       }
     }
@@ -429,7 +414,7 @@ export class BacklogPoller {
 
     if (probeResult.recovered) {
       console.log(
-        `[Poller] 🎉 LLMクォータの回復を確認しました！クォータロックファイルを解除し、Backlogポーリングを再開します。`
+        `[Poller] 🎉 LLMクォータの回復を確認しました！クォータロックファイルを解除し、チケットポーリングを再開します。`
       );
       this.logger?.info(
         "quota_recovered",
@@ -461,47 +446,11 @@ export class BacklogPoller {
     }
   }
 
-  private getStatusNameForRole(role: AgentRole): string {
-    switch (role) {
-      case "spec-writer":
-        return "詳細設計中";
-      case "spec-reviewer":
-        return "設計レビュー中";
-      case "developer":
-        return "実装中";
-      case "code-reviewer":
-        return "技術レビュー中";
-      case "requirement-reviewer":
-        return "要件レビュー中";
-      default:
-        return "処理中";
-    }
-  }
-
-  private getPhaseTagForRole(role: AgentRole): string {
-    switch (role) {
-      case "spec-writer":
-        return PHASE_TAGS.specWriter;
-      case "spec-reviewer":
-        return PHASE_TAGS.specReviewer;
-      case "developer":
-        return PHASE_TAGS.developer;
-      case "code-reviewer":
-        return PHASE_TAGS.codeReviewer;
-      case "requirement-reviewer":
-        return PHASE_TAGS.requirementReviewer;
-      default:
-        return PHASE_TAGS.specWriter;
-    }
-  }
-
   private async resumeQuotaInterruptedIssue(metadata: QuotaLockMetadata): Promise<void> {
     try {
       console.log(
         `[Poller][${metadata.issueKey}] 🚀 クォータ回復により中断チケットの自動再開を実行します (担当ロール: [${metadata.role}])`
       );
-      const issue = await this.backlog.getIssue(metadata.issueKey);
-      const isCustom = this.dispatcher.isCustomStatusMode(this.projectStatuses);
       const role = metadata.role;
 
       const resumeComment = [
@@ -511,44 +460,27 @@ export class BacklogPoller {
         `中断していたエージェント **[${role}]** による自律処理を自動的に再開します。`,
       ].join("\n");
 
-      if (isCustom) {
-        const targetStatusName = this.getStatusNameForRole(role);
-        const targetStatusId =
-          this.dispatcher.findStatusIdByName(this.projectStatuses, targetStatusName) ||
-          this.dispatcher.findStatusIdByName(this.projectStatuses, "処理中") ||
-          2;
+      const workflowDef = loadWorkflow({ projectKey: this.projectKey });
+      const issue = await this.tracker.getIssue(metadata.issueKey, workflowDef);
+      const stepDef =
+        workflowDef.steps[role] ||
+        Object.values(workflowDef.steps).find((s: WorkflowStep) => s.role === role || s.name === role);
 
-        if (typeof this.backlog.updateIssue === "function") {
-          await this.backlog.updateIssue(issue.issueKey, {
-            statusId: targetStatusId,
-            comment: resumeComment,
-          });
-        } else {
-          await this.backlog.updateIssueStatus(issue.issueKey, targetStatusId, resumeComment);
-        }
+      if (stepDef) {
+        await this.tracker.updateIssueStep(issue.key, stepDef, {
+          comment: resumeComment,
+        });
       } else {
-        const phaseTag = this.getPhaseTagForRole(role);
-        const newSummary = formatSummaryWithPhase(issue.summary, phaseTag);
-        const targetStatusId =
-          this.dispatcher.findStatusIdByName(this.projectStatuses, "処理中") || 2;
-
-        if (typeof this.backlog.updateIssue === "function") {
-          await this.backlog.updateIssue(issue.issueKey, {
-            summary: newSummary,
-            statusId: targetStatusId,
-            comment: resumeComment,
-          });
-        } else {
-          await this.backlog.updateIssueStatus(issue.issueKey, targetStatusId, resumeComment);
-        }
+        await this.tracker.updateLifecycle(issue.key, "in_progress", {
+          comment: resumeComment,
+        });
       }
-
-      // キャッシュをクリアして次のポーリングで即座に検知・着手させる
-      this.issueStatusCache.delete(issue.issueKey);
+      this.issueStatusCache.delete(issue.key);
       console.log(`[Poller][${metadata.issueKey}] 自動再開のステータス更新 & コメント投稿が完了しました`);
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
       console.error(`[Poller][${metadata.issueKey}] 自動再開処理でエラー発生:`, err);
-      this.logger?.error("error", `自動再開処理例外: ${err.message}`, { issueKey: metadata.issueKey });
+      this.logger?.error("error", `自動再開処理例外: ${errMsg}`, { issueKey: metadata.issueKey });
     }
   }
 
@@ -556,3 +488,5 @@ export class BacklogPoller {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
+
+export { IssuePoller as BacklogPoller };

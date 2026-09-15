@@ -16,6 +16,7 @@ export interface AppConfig {
   backlogApiKey: string;
   backlogProjectKey: string;
   backlogIssueKey?: string;
+  trackerType: "backlog" | "mock" | "github";
   pollIntervalSec: number;
   dryRun: boolean;
   agentRunner: "agy" | "claude" | "mock";
@@ -44,6 +45,7 @@ export function loadConfig(): AppConfig {
   const domain = process.env.BACKLOG_DOMAIN || "backlog.jp";
   const projectKey = process.env.BACKLOG_PROJECT_KEY || "STUDY";
   const issueKey = process.env.BACKLOG_ISSUE_KEY || undefined;
+  const trackerType = (process.env.TRACKER_TYPE || process.env.BTS_TYPE || "backlog") as AppConfig["trackerType"];
   const pollIntervalSec = Number(process.env.POLL_INTERVAL_SEC) || 10;
   const dryRun = process.env.DRY_RUN === "true";
   const agentRunner = (process.env.AGENT_RUNNER || "agy") as AppConfig["agentRunner"];
@@ -71,6 +73,7 @@ export function loadConfig(): AppConfig {
     backlogApiKey: apiKey,
     backlogProjectKey: projectKey,
     backlogIssueKey: issueKey,
+    trackerType,
     pollIntervalSec,
     dryRun,
     agentRunner,

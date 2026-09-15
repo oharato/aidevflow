@@ -54,8 +54,9 @@ export class GitHubService implements IGitHubService {
         // リモートが先行している場合は事前に fast-forward pull を試みる
         await execAsync(`git pull --ff-only origin "${branchName}"`, { cwd: worktreeDir }).catch(() => {});
         await execAsync(`git push -u origin "${branchName}"`, { cwd: worktreeDir });
-      } catch (pushErr: any) {
-        console.warn(`[GitHub] git push 警告: ${pushErr.message}`);
+      } catch (pushErr: unknown) {
+        const msg = pushErr instanceof Error ? pushErr.message : String(pushErr);
+        console.warn(`[GitHub] git push 警告: ${msg}`);
       }
 
       try {
@@ -76,7 +77,7 @@ export class GitHubService implements IGitHubService {
         `## 概要`,
         options.summary,
         ``,
-        `## Backlog チケット`,
+        `## 関連課題 (Issue)`,
         `課題キー: ${options.issueKey}`,
         ``,
         `## 詳細・背景`,
@@ -95,8 +96,9 @@ export class GitHubService implements IGitHubService {
       const prUrl = createdUrl.trim();
       console.log(`[GitHub] プルリクエスト作成成功: ${prUrl}`);
       return prUrl;
-    } catch (err: any) {
-      console.error(`[GitHub] PR 作成エラー:`, err.message);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[GitHub] PR 作成エラー:`, msg);
       return null;
     }
   }
@@ -136,8 +138,8 @@ export class GitHubService implements IGitHubService {
         return state;
       }
       return "UNKNOWN";
-    } catch (err: any) {
-      const msg = (err.message || "").toLowerCase();
+    } catch (err: unknown) {
+      const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
       if (msg.includes("no pull requests found") || msg.includes("could not resolve to a pullrequest")) {
         return "NOT_FOUND";
       }

@@ -1,0 +1,525 @@
+import type { BacklogClient } from "../../backlog/client.js";
+import type { BacklogIssue, BacklogStatus } from "../../backlog/types.js";
+import { sanitizeBacklogText } from "../../backlog/client.js";
+import {
+  hasCustomStatuses,
+  stripPhasePrefix,
+  formatSummaryWithPhase,
+  PHASE_TAGS,
+  isInvestigationIssue,
+  isFastModeIssue,
+} from "../../backlog/prefix-helper.js";
+import type { WorkflowDefinition, WorkflowStep } from "../../workflow/types.js";
+import type {
+  IIssueTracker,
+  TrackedIssue,
+  IssueLifecycleState,
+  IssueFilterOptions,
+  StepTransitionOptions,
+  LifecycleTransitionOptions,
+} from "../types.js";
+
+export interface BacklogTrackerOptions {
+  client: BacklogClient;
+  projectKey: string;
+  customStatusModeOverride?: boolean;
+}
+
+/**
+ * Backlog を BTS として扱うアダプタークラス
+ * 宣言的ワークフロー定義（WorkflowDefinition）に基づき、
+ * チケットのステップ検知やステータス・件名プレフィックス更新を行う
+ */
+export class BacklogTracker implements IIssueTracker {
+  readonly trackerType = "backlog";
+
+  private client: BacklogClient;
+  private projectKey: string;
+  private projectId: number | null = null;
+  private projectStatuses: BacklogStatus[] = [];
+  private isCustomMode: boolean = false;
+  private customStatusModeOverride?: boolean;
+
+  constructor(options: BacklogTrackerOptions) {
+    this.client = options.client;
+    this.projectKey = options.projectKey;
+    this.customStatusModeOverride = options.customStatusModeOverride;
+    if (options.customStatusModeOverride !== undefined) {
+      this.isCustomMode = options.customStatusModeOverride;
+    }
+  }
+
+  getClient(): BacklogClient {
+    return this.client;
+  }
+
+  getProjectKey(): string {
+    return this.projectKey;
+  }
+
+  getProjectId(): number | null {
+    return this.projectId;
+  }
+
+  getProjectStatuses(): BacklogStatus[] {
+    return [...this.projectStatuses];
+  }
+
+  setProjectStatuses(statuses: Array<{ id?: number | string; name: string } | unknown>): void {
+    this.projectStatuses = statuses as BacklogStatus[];
+    if (this.customStatusModeOverride === undefined) {
+      this.isCustomMode = hasCustomStatuses(this.projectStatuses);
+    }
+  }
+
+  isCustomStatusMode(): boolean {
+    return this.isCustomMode;
+  }
+
+  async init(): Promise<void> {
+    const project = await this.client.getProject(this.projectKey);
+    this.projectId = project.id;
+    this.projectStatuses = await this.client.getProjectStatuses(project.id);
+    this.isCustomMode =
+      this.customStatusModeOverride !== undefined
+        ? this.customStatusModeOverride
+        : hasCustomStatuses(this.projectStatuses);
+  }
+
+  /**
+   * 状態追跡・スキャン対象の候補チケット一覧を取得 (非アクション対象も含む)
+   */
+  async fetchCandidateIssues(
+    workflowDef: WorkflowDefinition,
+    filter?: IssueFilterOptions
+  ): Promise<TrackedIssue[]> {
+    if (!this.projectId) {
+      await this.init();
+    }
+
+    const rawIssues = await this.client.getIssues({
+      projectId: [this.projectId!],
+      sort: "updated",
+      order: "asc",
+      count: 50,
+    });
+
+    const candidates: TrackedIssue[] = [];
+
+    for (const raw of rawIssues) {
+      // 1. 種別フィルタ
+      if (filter?.targetIssueType && raw.issueType?.name !== filter.targetIssueType) {
+        continue;
+      }
+
+      // 2. カテゴリーフィルタ
+      if (filter?.targetCategory) {
+        const hasCat = raw.category?.some((c) => c.name === filter.targetCategory);
+        if (!hasCat) continue;
+      }
+
+      // 3. [AI] タグ必須フィルタ
+      if (filter?.requireAiTag && !/\[AI\]/i.test(raw.summary)) {
+        continue;
+      }
+
+      candidates.push(this.toTrackedIssue(raw, workflowDef));
+    }
+
+    return candidates;
+  }
+
+  /**
+   * 着手可能なチケットを取得
+   */
+  async fetchActionableIssues(
+    workflowDef: WorkflowDefinition,
+    filter?: IssueFilterOptions
+  ): Promise<TrackedIssue[]> {
+    const candidates = await this.fetchCandidateIssues(workflowDef, filter);
+    return candidates.filter(
+      (tracked) => tracked.lifecycleState === "in_progress" && Boolean(tracked.currentStepName)
+    );
+  }
+
+  /**
+   * 特定チケットを取得
+   */
+  async getIssue(key: string, workflowDef?: WorkflowDefinition): Promise<TrackedIssue> {
+    const raw = await this.client.getIssue(key);
+    return this.toTrackedIssue(raw, workflowDef);
+  }
+
+  /**
+   * 次のワークフローステップへ更新
+   */
+  async updateIssueStep(
+    key: string,
+    nextStep: WorkflowStep,
+    options: StepTransitionOptions = {}
+  ): Promise<void> {
+    const comment = options.comment;
+
+    if (this.isCustomMode) {
+      const targetStatusId = this.findStatusIdByName(nextStep.custom_status);
+      if (targetStatusId) {
+        if (typeof this.client.updateIssue === "function") {
+          await this.client.updateIssue(key, { statusId: targetStatusId, comment });
+        } else if (typeof this.client.updateIssueStatus === "function") {
+          await this.client.updateIssueStatus(key, targetStatusId, comment);
+        } else if (comment && typeof this.client.addComment === "function") {
+          await this.client.addComment(key, comment);
+        }
+        return;
+      }
+    }
+
+    // 件名プレフィックスモード
+    let cleanTitle = key;
+    if (typeof this.client.getIssue === "function") {
+      try {
+        const raw = await this.client.getIssue(key);
+        if (raw?.summary) cleanTitle = stripPhasePrefix(raw.summary);
+      } catch {
+        // ignore
+      }
+    }
+    const tag = nextStep.backlog_tag ? nextStep.backlog_tag.replace(/^\[|\]$/g, "") : nextStep.name;
+    const newSummary = options.newSummary || formatSummaryWithPhase(cleanTitle, tag);
+    const inProgressStatusId = this.findStatusIdByName("処理中") || 2;
+
+    if (typeof this.client.updateIssue === "function") {
+      await this.client.updateIssue(key, {
+        summary: sanitizeBacklogText(newSummary),
+        statusId: inProgressStatusId,
+        comment,
+      });
+    } else if (typeof this.client.updateIssueStatus === "function") {
+      await this.client.updateIssueStatus(key, inProgressStatusId, comment);
+    } else if (comment && typeof this.client.addComment === "function") {
+      await this.client.addComment(key, comment);
+    }
+  }
+
+  /**
+   * ライフサイクル状態の更新
+   */
+  async updateLifecycle(
+    key: string,
+    state: IssueLifecycleState,
+    options: LifecycleTransitionOptions = {}
+  ): Promise<void> {
+    const comment = options.comment;
+    let cleanTitle = key;
+    let isInvestigation = false;
+
+    if (typeof this.client.getIssue === "function") {
+      try {
+        const raw = await this.client.getIssue(key);
+        if (raw?.summary) {
+          cleanTitle = stripPhasePrefix(raw.summary);
+          isInvestigation = isInvestigationIssue(raw);
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    let targetStatusId: number | null = null;
+    let targetSummary: string | undefined = options.newSummary;
+
+    switch (state) {
+      case "waiting_confirmation": {
+        if (this.isCustomMode) {
+          targetStatusId = this.findStatusIdByName("確認待ち");
+        } else {
+          targetSummary = targetSummary || formatSummaryWithPhase(cleanTitle, PHASE_TAGS.confirmHuman);
+          targetStatusId = this.findStatusIdByName("未対応") || 1;
+        }
+        break;
+      }
+      case "waiting_approval": {
+        if (this.isCustomMode) {
+          targetStatusId = this.findStatusIdByName("確認待ち");
+        } else {
+          // 人間の設計承認待ち (プレフィックスモード)
+          targetSummary = targetSummary || formatSummaryWithPhase(cleanTitle, PHASE_TAGS.specApprovalWait);
+          targetStatusId = this.findStatusIdByName("未対応") || 1;
+        }
+        break;
+      }
+      case "completed": {
+        if (this.isCustomMode) {
+          targetStatusId = this.findStatusIdByName("完了") || this.findStatusIdByName("処理済み");
+        } else {
+          const completedTag = isInvestigation
+            ? PHASE_TAGS.investigationCompleted
+            : PHASE_TAGS.completed;
+          targetSummary = targetSummary || formatSummaryWithPhase(cleanTitle, completedTag);
+          targetStatusId = this.findStatusIdByName("処理済み") || 3;
+        }
+        break;
+      }
+      case "in_progress": {
+        targetStatusId = this.findStatusIdByName("処理中") || 2;
+        break;
+      }
+      case "ready": {
+        targetStatusId = this.findStatusIdByName("未対応") || 1;
+        break;
+      }
+    }
+
+    const params: { summary?: string; statusId?: number; comment?: string } = {};
+    if (targetSummary) params.summary = sanitizeBacklogText(targetSummary);
+    if (targetStatusId) params.statusId = targetStatusId;
+    if (comment) params.comment = comment;
+
+    if (typeof this.client.updateIssue === "function") {
+      await this.client.updateIssue(key, params);
+    } else if (params.statusId && typeof this.client.updateIssueStatus === "function") {
+      await this.client.updateIssueStatus(key, params.statusId, comment);
+    } else if (comment && typeof this.client.addComment === "function") {
+      await this.client.addComment(key, comment);
+    }
+  }
+
+  /**
+   * コメント投稿
+   */
+  async addComment(key: string, content: string): Promise<void> {
+    await this.client.addComment(key, sanitizeBacklogText(content));
+  }
+
+  /**
+   * チケットの最近のコメント履歴（テキスト配列）を取得する
+   */
+  async getRecentComments(key: string, limit: number = 10): Promise<string[]> {
+    try {
+      let rawList: Array<{ content?: string; createdUser?: { name?: string } }> = [];
+      const clientAny = this.client as unknown as Record<string, unknown>;
+      if (typeof this.client.getComments === "function") {
+        rawList = await this.client.getComments(key, limit);
+      } else if (typeof clientAny.getIssueComments === "function") {
+        rawList = await (clientAny.getIssueComments as (k: string) => Promise<typeof rawList>)(key);
+      }
+      return rawList
+        .filter((c) => Boolean(c.content && c.content.trim().length > 0))
+        .map((c) => {
+          let text = (c.content || "").trim();
+          if (text.includes('{"event":') || text.includes('"step_update":')) {
+            text = "[システムログのため省略]";
+          } else if (text.length > 1500) {
+            text = text.slice(0, 1500) + "\n...[長文のため一部省略]...";
+          }
+          return `[${c.createdUser?.name || "User"}]: ${text}`;
+        })
+        .slice(-limit);
+    } catch {
+      // ignore
+    }
+    return [];
+  }
+
+  /**
+   * リソースクリーンアップ用の完了チケット一覧を取得
+   */
+  async fetchCompletedIssues(): Promise<TrackedIssue[]> {
+    if (!this.projectId) {
+      await this.init();
+    }
+
+    const rawIssues = await this.client.getIssues({
+      projectId: [this.projectId!],
+      sort: "updated",
+      order: "desc",
+      count: 100,
+    });
+
+    const completed: TrackedIssue[] = [];
+    for (const raw of rawIssues) {
+      const norm = (raw.status?.name || "").trim().toLowerCase();
+      const isCompleted =
+        norm === "完了" ||
+        norm === "closed" ||
+        norm === "complete" ||
+        norm === "completed" ||
+        norm.endsWith("完了") ||
+        raw.summary.includes("[完了]") ||
+        raw.summary.includes("[要件レビュー完了]") ||
+        raw.summary.includes("[調査完了]");
+
+      if (isCompleted) {
+        completed.push(this.toTrackedIssue(raw));
+      }
+    }
+
+    return completed;
+  }
+
+  findStatusIdByName(targetName: string): number | null {
+    const targetLower = targetName.toLowerCase();
+    const exact = this.projectStatuses.find((st) => st.name.toLowerCase() === targetLower);
+    if (exact) return exact.id;
+
+    const partial = this.projectStatuses.find((st) => st.name.toLowerCase().includes(targetLower));
+    if (partial) return partial.id;
+
+    return null;
+  }
+
+  /**
+   * BacklogIssue を TrackedIssue に変換する
+   */
+  private toTrackedIssue(raw: BacklogIssue, workflowDef?: WorkflowDefinition): TrackedIssue {
+    const cleanTitle = stripPhasePrefix(raw.summary);
+    const isInvestigation = isInvestigationIssue(raw);
+    const isFastMode = isFastModeIssue(raw);
+
+    const { stepName, stepDef, lifecycleState } = this.resolveStepAndLifecycle(
+      raw,
+      workflowDef,
+      isInvestigation,
+      isFastMode
+    );
+
+    return {
+      key: raw.issueKey,
+      id: raw.id,
+      title: cleanTitle,
+      rawTitle: raw.summary,
+      description: raw.description || "",
+      currentStepName: stepName,
+      currentStepDef: stepDef,
+      lifecycleState,
+      rawStatusName: raw.status.name,
+      recentComments: [],
+      issueType: raw.issueType?.name,
+      categories: raw.category?.map((c) => c.name),
+      isInvestigation,
+      isFastMode,
+      updatedAt: raw.updated || raw.created,
+    };
+  }
+
+  /**
+   * ステップとライフサイクルの動的解決
+   */
+  private resolveStepAndLifecycle(
+    issue: BacklogIssue,
+    workflowDef?: WorkflowDefinition,
+    isInvestigation?: boolean,
+    isFastMode?: boolean
+  ): {
+    stepName?: string;
+    stepDef?: WorkflowStep;
+    lifecycleState: IssueLifecycleState;
+  } {
+    const statusName = issue.status.name;
+    const summary = issue.summary;
+
+    // 1. 人間確認待ち
+    if (statusName.includes("確認待ち") || summary.includes("[確認待ち]")) {
+      // プレフィックスモードで、人間が「処理中」に変更して再開を指示した場合
+      if (summary.includes("[確認待ち]") && statusName.includes("処理中")) {
+        const resumeStepName = isFastMode && workflowDef?.steps["developer"]
+          ? "developer"
+          : (workflowDef?.initial_step || "spec-writer");
+        const resumeStep = workflowDef?.steps[resumeStepName];
+        return {
+          stepName: resumeStep?.name || resumeStepName,
+          stepDef: resumeStep,
+          lifecycleState: "in_progress",
+        };
+      }
+      return { lifecycleState: "waiting_confirmation" };
+    }
+
+    // 2. 人間設計承認待ち
+    if (summary.includes("[設計承認待ち]")) {
+      if (statusName.includes("未対応")) {
+        return { lifecycleState: "waiting_approval" };
+      }
+      // 人間が承認して「処理中」にした場合
+      if (statusName.includes("処理中")) {
+        const devStep = workflowDef?.steps["developer"];
+        return {
+          stepName: devStep?.name || "developer",
+          stepDef: devStep,
+          lifecycleState: "in_progress",
+        };
+      }
+    }
+
+    // 3. 完了状態
+    if (
+      statusName.includes("完了") ||
+      statusName.includes("処理済み") ||
+      summary.includes("[完了]") ||
+      summary.includes("[要件レビュー完了]") ||
+      summary.includes("[調査完了]")
+    ) {
+      if (statusName.includes("処理中")) {
+        // 人間レビュー後の差し戻しで「処理中」に戻された場合
+        const resumeStep = isInvestigation ? "spec-writer" : "developer";
+        const stepDef = workflowDef?.steps[resumeStep];
+        return {
+          stepName: stepDef?.name || resumeStep,
+          stepDef,
+          lifecycleState: "in_progress",
+        };
+      }
+      return { lifecycleState: "completed" };
+    }
+
+    // 4. 未対応 (初期状態)
+    if (statusName.includes("未対応")) {
+      return { lifecycleState: "ready" };
+    }
+
+    // 5. 進行中 (処理中 または カスタム状態)
+    if (workflowDef) {
+      // 5-1. カスタム状態モード
+      if (this.isCustomMode) {
+        for (const step of Object.values(workflowDef.steps)) {
+          if (
+            step.custom_status &&
+            statusName.toLowerCase().includes(step.custom_status.toLowerCase())
+          ) {
+            return {
+              stepName: step.name,
+              stepDef: step,
+              lifecycleState: "in_progress",
+            };
+          }
+        }
+      }
+
+      // 5-2. 件名プレフィックスモード
+      for (const step of Object.values(workflowDef.steps)) {
+        if (step.backlog_tag && summary.includes(step.backlog_tag)) {
+          return {
+            stepName: step.name,
+            stepDef: step,
+            lifecycleState: "in_progress",
+          };
+        }
+      }
+
+      // 5-3. タグなしで「処理中」の場合の初期ステップ
+      if (statusName.includes("処理中")) {
+        const initialStepName = isFastMode && workflowDef.steps["developer"]
+          ? "developer"
+          : workflowDef.initial_step;
+        const initialStep = workflowDef.steps[initialStepName];
+        return {
+          stepName: initialStep?.name || initialStepName,
+          stepDef: initialStep,
+          lifecycleState: "in_progress",
+        };
+      }
+    }
+
+    return { lifecycleState: "ready" };
+  }
+}

@@ -7,6 +7,8 @@ steps:
   spec-writer:
     role: spec-writer
     title: "詳細仕様策定"
+    step_tag: "[詳細設計中]"
+    status_name: "詳細設計"
     backlog_tag: "[詳細設計中]"
     custom_status: "詳細設計"
     edit: true
@@ -21,6 +23,8 @@ steps:
   spec-reviewer:
     role: spec-reviewer
     title: "詳細仕様レビュー"
+    step_tag: "[設計レビュー中]"
+    status_name: "設計レビュー"
     backlog_tag: "[設計レビュー中]"
     custom_status: "設計レビュー"
     edit: false
@@ -38,6 +42,8 @@ steps:
   developer:
     role: developer
     title: "コード実装・テスト・PR作成"
+    step_tag: "[実装中]"
+    status_name: "実装"
     backlog_tag: "[実装中]"
     custom_status: "実装"
     edit: true
@@ -52,6 +58,8 @@ steps:
   code-reviewer:
     role: code-reviewer
     title: "技術観点レビュー"
+    step_tag: "[技術レビュー中]"
+    status_name: "技術レビュー"
     backlog_tag: "[技術レビュー中]"
     custom_status: "技術レビュー"
     edit: false
@@ -68,6 +76,8 @@ steps:
   requirement-reviewer:
     role: requirement-reviewer
     title: "要件充足度レビュー"
+    step_tag: "[要件レビュー中]"
+    status_name: "要件レビュー"
     backlog_tag: "[要件レビュー中]"
     custom_status: "要件レビュー"
     edit: false

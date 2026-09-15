@@ -27,8 +27,8 @@ export interface LogEvent {
   issueKey?: string;
   role?: string;
   durationMs?: number;
-  usage?: Record<string, unknown>;
-  cumulativeTokens?: Record<string, unknown>;
+  usage?: Record<string, unknown> | object;
+  cumulativeTokens?: Record<string, unknown> | object;
   data?: Record<string, unknown>;
 }
 
@@ -36,8 +36,8 @@ export interface LogMeta {
   issueKey?: string;
   role?: string;
   durationMs?: number;
-  usage?: Record<string, unknown>;
-  cumulativeTokens?: Record<string, unknown>;
+  usage?: Record<string, unknown> | object;
+  cumulativeTokens?: Record<string, unknown> | object;
   data?: Record<string, unknown>;
 }
 

@@ -10,12 +10,15 @@
 - ⚡ **[クォータ消費最適化 & 軽量パイプライン仕様書](quota_optimization.md)** (Fastモード・モデル最適化)
 - 🛡️ **[トラブルシューティング & エスカレーション仕様書](troubleshooting.md)** (ループ防止・クォータ停止・プロセスロック)
 - 🎼 **[宣言的ワークフローエンジン & 権限制御設計書](declarative_workflow_engine_design.md)** (YAML定義・決定キーワード・edit:false多層防御)
+- 🧩 **[Issue Tracker (BTS) 抽象化設計書](issue_tracker_abstraction.md)** (BTS抽象化・BacklogAdapter・MockTracker)
 
 ---
 
 ## 1. 概要
 
-`aidevflow` は、チーム開発プラットフォーム **Backlog** のプロジェクト配下にあるチケット（課題）状態の変化を検知し、人間の開発フローに沿った5つの専門 AI エージェントを順次ディスパッチする自律型開発パイプラインの常駐デーモン（TypeScript）です。
+`aidevflow` は、課題管理システム（BTS: Backlog / 将来の GitHub Issues 等）のプロジェクト配下にあるチケット（課題）状態の変化を検知し、人間の開発フローに沿った専門 AI エージェント（標準5役、またはユーザー定義ステップ）を順次ディスパッチする自律型開発パイプラインの常駐デーモン（TypeScript）です。
+
+課題管理システム基盤は `IIssueTracker` インターフェースで完全に抽象化されており、デフォルトの **Backlog**（公式 CLI `bee` / API 連携）に加え、オフライン検証用の **MockIssueTracker** や将来の **GitHub Issues** を環境変数 `TRACKER_TYPE` で切り替えて利用できます。
 
 エージェント実行基盤は `IAgentRunner` インターフェースで抽象化されており、現在は個人開発・検証用として **Google Antigravity CLI (`agy`)** を使用していますが、社内持ち込み・本番運用時には社内標準の **Anthropic Claude Code (`claude` CLI)** に切り替えて稼働できるマルチランナー設計となっています（将来的なマネージド実行環境として OpenAI Agents API 等のプラグイン追加も可能）。詳細な業界動向とフレームワーク比較は **[docs/agentic_sdlc_landscape.md](agentic_sdlc_landscape.md)** を参照してください。
 
@@ -45,20 +48,22 @@
 
 ```mermaid
 flowchart TD
-    subgraph Backlog["Backlog (ohchans.backlog.jp / Project: STUDY)"]
+    subgraph BTS["課題管理システム (BTS: Backlog / GitHub Issues / Mock)"]
         ProjectIssues["プロジェクト配下の課題群\n(STUDY-1, STUDY-2, STUDY-3 ...)\n詳細に1つまたは複数のリポジトリを記載"]
         ReviewComment["レビュー依頼コメント\n(複数PRリンク一覧 / 成果物要約)"]
     end
 
     subgraph Daemon["aidevflow TypeScript Daemon"]
-        Poller["BacklogPoller\n(プロジェクト定期監視 / 状態検知)"]
-        Dispatcher["AgentDispatcher\n(ステータス判定 & 振り分け)"]
+        TrackerFactory["createTracker(config)\n(トラッカーファクトリ)"]
+        Tracker["IIssueTracker\n(BacklogTracker / MockIssueTracker)"]
+        Poller["IssuePoller\n(チケット定期監視 / 状態検知)"]
+        Dispatcher["AgentDispatcher\n(ステップ判定 & 振り分け)"]
         WorkflowEng["WorkflowEngine & Loader\n(YAML宣言的定義 & 決定キーワード)"]
         PermGuard["PermissionGuard\n(edit:false 権限制御 & 多層防御)"]
         RepoParser["extractRepositoryPaths\n(チケット詳細から複数リポジトリ抽出)"]
         WorktreeMgr["GitWorktreeManager\n(複数リポジトリの clone & worktree 準備)"]
         GHService["GitHubService\n(複数リポジトリへの push & PR 作成)"]
-        Reporter["Backlog 更新\n(ステータス更新 & レビュー依頼コメント投稿)"]
+        Reporter["BTS 更新 & コメント投稿\n(updateIssueStep / updateLifecycle)"]
         Logger["JsonlLogger\n(構造化ログ出力)"]
     end
 
@@ -80,7 +85,9 @@ flowchart TD
         ReqReviewer["5. Requirement-Reviewer\n(要件的レビュー: 要件充足度/マージ整合性)"]
     end
 
-    ProjectIssues -->|"定期取得"| Poller
+    ProjectIssues <-->|"API / CLI 通信"| Tracker
+    Poller -->|"fetchActionableIssues"| Tracker
+    Tracker -->|"TrackedIssue 配列"| Poller
     Poller -->|"状態変更検知"| Dispatcher
     Dispatcher -->|"ワークフロー解決 & 次ステップ評価"| WorkflowEng
     Dispatcher -->|"権限制御 & ロールバック"| PermGuard
@@ -101,8 +108,8 @@ flowchart TD
     GitHubPRA -.->|"PR URL 返却"| Dispatcher
     GitHubPRB -.->|"PR URL 返却"| Dispatcher
 
-    ReqReviewer -->|"全工程完了 (承認)"| Reporter
-    Reporter -->|"PRリンク一覧付きレビュー依頼コメント"| ReviewComment
+    Dispatcher -->|"updateIssueStep / updateLifecycle"| Tracker
+    Tracker -->|"ステータス更新 & レビュー依頼コメント"| ReviewComment
     ReviewComment --> ProjectIssues
 
     Dispatcher -.->|"イベント記録"| Logger

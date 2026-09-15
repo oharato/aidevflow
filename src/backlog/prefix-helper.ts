@@ -1,5 +1,4 @@
 import type { AgentRole } from "../agents/types.js";
-import type { BacklogStatus } from "./types.js";
 
 // フェーズとプレフィックス名のマッピング
 export const PHASE_TAGS = {
@@ -143,7 +142,7 @@ export function isFastModeIssue(issue: {
 /**
  * プロジェクトのステータス一覧に、カスタム状態が存在するか判定する
  */
-export function hasCustomStatuses(statuses: BacklogStatus[]): boolean {
+export function hasCustomStatuses(statuses: Array<{ name: string }>): boolean {
   const customNames = ["詳細設計", "設計レビュー", "技術レビュー", "要件レビュー", "確認待ち"];
   return statuses.some((st) => customNames.some((c) => st.name.includes(c)));
 }
@@ -221,7 +220,7 @@ export function formatSummaryWithPhase(summary: string, phaseTag: string): strin
  * 次のフェーズタグ名を取得する
  */
 export function getNextPhaseTag(
-  currentRole: AgentRole,
+  currentRole: AgentRole | string,
   isRejection: boolean,
   isInvestigation: boolean = false,
   isFastMode: boolean = false,
@@ -245,12 +244,12 @@ export function getNextPhaseTag(
 
   switch (currentRole) {
     case "spec-writer":
-    case "architect" as any:
+    case "architect":
       return isInvestigation
         ? PHASE_TAGS.investigationSpecReviewer // 調査レビュー中
         : PHASE_TAGS.specReviewer; // 設計レビュー中
     case "spec-reviewer":
-    case "tech-lead" as any:
+    case "tech-lead":
       if (isInvestigation) {
         return PHASE_TAGS.investigationCompleted; // 調査完了
       }
@@ -265,7 +264,7 @@ export function getNextPhaseTag(
         ? PHASE_TAGS.completed // Fastモード時は code-reviewer 承認で要件レビュー完了（全工程完了）
         : PHASE_TAGS.requirementReviewer; // 要件レビュー中
     case "requirement-reviewer":
-    case "qa" as any:
+    case "qa":
       return PHASE_TAGS.completed; // 要件レビュー完了
     default:
       return PHASE_TAGS.completed;

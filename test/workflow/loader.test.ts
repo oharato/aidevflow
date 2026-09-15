@@ -110,4 +110,19 @@ describe("WorkflowLoader", () => {
       expect(prompt).toContain("<!-- DECISION: APPROVED -->");
     });
   });
+
+  describe("validateAndNormalizeWorkflow", () => {
+    it("step_tag と status_name が指定された場合、tracker_tag, backlog_tag, custom_status にも正規化反映されること", () => {
+      const wf = loadWorkflow({
+        workflowsDir: path.resolve(process.cwd(), "workflows"),
+      });
+
+      const step = wf.steps["spec-writer"];
+      expect(step.tracker_tag).toBe("[詳細設計中]");
+      expect(step.step_tag).toBe("[詳細設計中]");
+      expect(step.backlog_tag).toBe("[詳細設計中]");
+      expect(step.status_name).toBe("詳細設計");
+      expect(step.custom_status).toBe("詳細設計");
+    });
+  });
 });

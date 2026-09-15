@@ -10,6 +10,7 @@
 - ⚡ **[クォータ消費最適化 & 軽量パイプライン仕様書](quota_optimization.md)** (Fastモード・モデル最適化)
 - 🛡️ **[トラブルシューティング & エスカレーション仕様書](troubleshooting.md)** (本ドキュメント)
 - 🎼 **[宣言的ワークフローエンジン & 権限制御設計書](declarative_workflow_engine_design.md)** (YAML定義・決定キーワード・edit:false多層防御)
+- 🧩 **[Issue Tracker (BTS) 抽象化設計書](issue_tracker_abstraction.md)** (BTS抽象化・BacklogAdapter・MockTracker)
 
 ---
 

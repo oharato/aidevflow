@@ -96,6 +96,8 @@ export class WorkflowEngine {
         isRejection: decision === "REJECTED",
         isEscalation: true,
         isHumanGate: false,
+        targetStepTag: "[確認待ち]",
+        targetStatusName: "確認待ち",
         targetBacklogTag: "[確認待ち]",
         targetCustomStatus: "確認待ち",
       };
@@ -123,20 +125,25 @@ export class WorkflowEngine {
     );
     const isRejection = decision === "REJECTED";
 
-    let targetBacklogTag: string;
-    let targetCustomStatus: string;
+    let targetStepTag: string;
+    let targetStatusName: string;
 
     if (nextStepName === "COMPLETE") {
-      targetBacklogTag = "[完了]";
-      targetCustomStatus = "完了";
+      targetStepTag = "[完了]";
+      targetStatusName = "完了";
     } else if (nextStepName === "ABORT") {
-      targetBacklogTag = "[確認待ち]";
-      targetCustomStatus = "確認待ち";
+      targetStepTag = "[確認待ち]";
+      targetStatusName = "確認待ち";
     } else {
       const nextStep = this.definition.steps[nextStepName];
-      targetBacklogTag = nextStep?.backlog_tag || `[${nextStepName}]`;
-      targetCustomStatus = nextStep?.custom_status || nextStepName;
+      targetStepTag =
+        nextStep?.tracker_tag || nextStep?.step_tag || nextStep?.backlog_tag || `[${nextStepName}]`;
+      targetStatusName =
+        nextStep?.status_name || nextStep?.custom_status || nextStepName;
     }
+
+    const targetBacklogTag = targetStepTag;
+    const targetCustomStatus = targetStatusName;
 
     this.executionHistory.push({
       stepName: currentStep.name,
@@ -151,6 +158,8 @@ export class WorkflowEngine {
       isRejection,
       isEscalation,
       isHumanGate,
+      targetStepTag,
+      targetStatusName,
       targetBacklogTag,
       targetCustomStatus,
     };

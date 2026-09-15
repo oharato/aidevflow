@@ -67,9 +67,10 @@ async function main() {
       logger.info("status_created", `ステータス "${target.name}" を作成しました`, {
         data: { statusId: created.id, name: created.name, color: created.color },
       });
-    } catch (err: any) {
-      console.error(`  ✗ 追加失敗: "${target.name}":`, err.message);
-      logger.error("error", `ステータス "${target.name}" の追加に失敗しました: ${err.message}`);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`  ✗ 追加失敗: "${target.name}":`, errMsg);
+      logger.error("error", `ステータス "${target.name}" の追加に失敗しました: ${errMsg}`);
     }
   }
 

@@ -2,11 +2,10 @@ import fs from "fs";
 import path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
-import type { BacklogClient } from "../backlog/client.js";
+import type { IIssueTracker, TrackedIssue } from "../tracker/types.js";
 import type { GitWorktreeManager } from "../git/worktree.js";
 import type { IGitHubService, PullRequestState } from "../git/github.js";
 import type { JsonlLogger } from "../logger/jsonl.js";
-import type { BacklogStatus } from "../backlog/types.js";
 
 const execAsync = promisify(exec);
 
@@ -25,19 +24,81 @@ export interface CleanupSummary {
   orphanDockerProjects?: string[];
 }
 
+export interface IssueClientLike {
+  getIssue(key: string): Promise<unknown>;
+}
+
 export class ResourceCleaner {
-  private backlog: BacklogClient;
+  private tracker: IIssueTracker;
   private worktreeManager: GitWorktreeManager;
   private githubService: IGitHubService;
   private logger?: JsonlLogger;
 
   constructor(
-    backlog: BacklogClient,
+    trackerOrClient: IIssueTracker | IssueClientLike,
     worktreeManager: GitWorktreeManager,
     githubService: IGitHubService,
     logger?: JsonlLogger
   ) {
-    this.backlog = backlog;
+    if (trackerOrClient && "trackerType" in trackerOrClient) {
+      this.tracker = trackerOrClient;
+    } else if (trackerOrClient && typeof trackerOrClient.getIssue === "function") {
+      const client = trackerOrClient;
+      this.tracker = {
+        trackerType: "client-compat",
+        init: async () => {},
+        fetchActionableIssues: async () => [],
+        fetchCandidateIssues: async () => [],
+        fetchCompletedIssues: async () => [],
+        getIssue: async (key: string): Promise<TrackedIssue> => {
+          const raw = await client.getIssue(key);
+          if (raw && typeof raw === "object" && "lifecycleState" in raw) {
+            return raw as TrackedIssue;
+          }
+          const rawObj = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+          const statusObj = rawObj.status as { name?: string } | undefined;
+          const statusName =
+            (typeof rawObj.rawStatusName === "string" ? rawObj.rawStatusName : undefined) ||
+            statusObj?.name ||
+            "";
+          const isCompleted =
+            statusName === "完了" ||
+            statusName === "closed" ||
+            statusName === "complete" ||
+            statusName === "completed" ||
+            statusName.endsWith("完了");
+          return {
+            key: (typeof rawObj.issueKey === "string" ? rawObj.issueKey : undefined) || key,
+            title: (typeof rawObj.summary === "string" ? rawObj.summary : undefined) || (typeof rawObj.title === "string" ? rawObj.title : "") || "",
+            rawTitle: (typeof rawObj.summary === "string" ? rawObj.summary : undefined) || (typeof rawObj.rawTitle === "string" ? rawObj.rawTitle : "") || "",
+            description: typeof rawObj.description === "string" ? rawObj.description : "",
+            lifecycleState: isCompleted ? "completed" : "in_progress",
+            rawStatusName: statusName,
+            recentComments: [],
+            isInvestigation: false,
+            isFastMode: false,
+            updatedAt: (typeof rawObj.updated === "string" ? rawObj.updated : undefined) || new Date().toISOString(),
+          };
+        },
+        updateIssueStep: async () => {},
+        updateLifecycle: async () => {},
+        addComment: async () => {},
+      };
+    } else {
+      this.tracker = {
+        trackerType: "empty",
+        init: async () => {},
+        fetchActionableIssues: async () => [],
+        fetchCandidateIssues: async () => [],
+        fetchCompletedIssues: async () => [],
+        getIssue: async (key: string) => {
+          throw new Error(`[ResourceCleaner] トラッカーが設定されていません: ${key}`);
+        },
+        updateIssueStep: async () => {},
+        updateLifecycle: async () => {},
+        addComment: async () => {},
+      };
+    }
     this.worktreeManager = worktreeManager;
     this.githubService = githubService;
     this.logger = logger;
@@ -102,9 +163,10 @@ export class ResourceCleaner {
         });
         stoppedFiles.push(file);
         console.log(`[Cleaner] ✅ Docker Compose 停止完了: ${file}`);
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
         // docker未起動時やコンテナが存在しない場合は警告にとどめる
-        console.warn(`[Cleaner] Docker Compose 停止警告 (${file}):`, err.message);
+        console.warn(`[Cleaner] Docker Compose 停止警告 (${file}):`, msg);
       }
     }
 
@@ -150,8 +212,9 @@ export class ResourceCleaner {
           shouldClean = true;
         } else if (issueKey) {
           try {
-            const issue = await this.backlog.getIssue(issueKey);
-            if (this.isCompletedStatus(issue.status.name)) {
+            const issue = await this.tracker.getIssue(issueKey);
+            const statusName = issue.rawStatusName || "";
+            if (issue.lifecycleState === "completed" || this.isCompletedStatus(statusName)) {
               shouldClean = true;
             }
           } catch {
@@ -165,8 +228,9 @@ export class ResourceCleaner {
             await execAsync(`docker compose -p "${projectName}" down -v --remove-orphans`);
             stoppedProjects.push(projectName);
             console.log(`[Cleaner] ✅ 孤児 Docker Compose 停止完了: ${projectName}`);
-          } catch (err: any) {
-            console.warn(`[Cleaner] 孤児 Docker Compose 停止警告 (${projectName}):`, err.message);
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[Cleaner] 孤児 Docker Compose 停止警告 (${projectName}):`, msg);
           }
         }
       }
@@ -182,7 +246,7 @@ export class ResourceCleaner {
    */
   async cleanupCompletedIssues(
     inFlightIssues: Set<string> = new Set(),
-    projectStatuses?: BacklogStatus[]
+    _projectStatuses?: unknown[]
   ): Promise<CleanupSummary> {
     const orphanDockerProjects = await this.cleanOrphanDockerContainers(inFlightIssues);
     const issueKeys = this.worktreeManager.listIssueKeysWithWorktrees();
@@ -205,24 +269,21 @@ export class ResourceCleaner {
         continue;
       }
 
-      // 2. Backlog チケットの状態を確認
-      let issue;
+      // 2. チケットの状態を確認
+      let issue: TrackedIssue;
       try {
-        issue = await this.backlog.getIssue(issueKey);
-      } catch (err: any) {
+        issue = await this.tracker.getIssue(issueKey);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
         // チケット取得失敗時（削除されたチケット等）は安全のためスキップ
-        console.warn(`[Cleaner] チケット ${issueKey} の取得失敗によりスキップ:`, err.message);
+        console.warn(`[Cleaner] チケット ${issueKey} の取得失敗によりスキップ:`, msg);
         summary.skippedCount++;
         continue;
       }
 
-      let isDone = this.isCompletedStatus(issue.status.name);
-      if (!isDone && projectStatuses) {
-        const matchingStatus = projectStatuses.find((s) => s.id === issue.status.id);
-        if (matchingStatus && this.isCompletedStatus(matchingStatus.name)) {
-          isDone = true;
-        }
-      }
+      const isDone =
+        issue.lifecycleState === "completed" ||
+        this.isCompletedStatus(issue.rawStatusName || "");
 
       if (!isDone) {
         // 未完了のチケット（未対応、処理中、確認待ち、要件レビュー中、処理済み等）は絶対にスキップ
@@ -258,7 +319,7 @@ export class ResourceCleaner {
       }
 
       // 4. クリーンアップ実行（Docker停止 -> Worktree削除）
-      console.log(`[Cleaner] 🧹 チケット ${issueKey} のクリーンアップを開始します (Backlog: 完了, PR: closed/merged)`);
+      console.log(`[Cleaner] 🧹 チケット ${issueKey} のクリーンアップを開始します (BTS: 完了, PR: closed/merged)`);
 
       const issueBaseDir = path.join(this.worktreeManager.getWorktreesDir(), issueKey);
       const stoppedDocker = await this.stopDockerCompose(issueBaseDir);

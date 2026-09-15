@@ -1,5 +1,5 @@
 import { loadConfig } from "../config.js";
-import { BacklogClient } from "../backlog/client.js";
+import { createTracker } from "../tracker/index.js";
 import { GitWorktreeManager } from "../git/worktree.js";
 import { GitHubService } from "../git/github.js";
 import { ResourceCleaner } from "../daemon/cleaner.js";
@@ -13,32 +13,24 @@ async function main() {
   const config = loadConfig();
   const logger = new JsonlLogger(config.logFilePath);
 
-  if (!config.backlogApiKey) {
-    console.error("【エラー】BACKLOG_API_KEY が設定されていません。");
+  let tracker;
+  try {
+    tracker = createTracker(config);
+    await tracker.init();
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error(errMsg);
     process.exit(1);
   }
 
-  const backlog = new BacklogClient(
-    config.backlogSpaceId,
-    config.backlogDomain,
-    config.backlogApiKey
-  );
-
-  const worktreeManager = new GitWorktreeManager();
+  const worktreeManager = new GitWorktreeManager(config.aidevflowHome);
   const githubService = new GitHubService();
-  const cleaner = new ResourceCleaner(backlog, worktreeManager, githubService, logger);
+  const cleaner = new ResourceCleaner(tracker, worktreeManager, githubService, logger);
 
-  let projectStatuses;
-  try {
-    const project = await backlog.getProject(config.backlogProjectKey);
-    projectStatuses = await backlog.getProjectStatuses(project.id);
-    console.log(`\nワークツリーディレクトリ: ${worktreeManager.getWorktreesDir()}`);
-    console.log(`対象プロジェクト: ${project.name} (${config.backlogProjectKey})\n`);
-  } catch (err: any) {
-    console.warn(`プロジェクト情報取得警告: ${err.message}`);
-  }
+  console.log(`\nワークツリーディレクトリ: ${worktreeManager.getWorktreesDir()}`);
+  console.log(`トラッカー種別: ${tracker.trackerType}\n`);
 
-  const summary = await cleaner.cleanupCompletedIssues(new Set(), projectStatuses);
+  const summary = await cleaner.cleanupCompletedIssues(new Set());
 
   console.log("\n--------------------------------------------------");
   console.log(`スキャン対象チケット: ${summary.scannedCount}件`);

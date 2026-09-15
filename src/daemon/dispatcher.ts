@@ -4,28 +4,30 @@ import { exec } from "child_process";
 import { promisify } from "util";
 
 const execAsync = promisify(exec);
-import type { BacklogClient } from "../backlog/client.js";
-import type { BacklogIssue, BacklogStatus } from "../backlog/types.js";
+import type { IIssueTracker, TrackedIssue, IssueLifecycleState } from "../tracker/types.js";
+import { wrapLegacyIssueClient } from "../tracker/factory.js";
 import type { IAgentRunner, AgentRole, AgentContext } from "../agents/types.js";
 import { TokenUsageTracker } from "../agents/runner.js";
 import type { JsonlLogger } from "../logger/jsonl.js";
 import { extractRepositoryPaths } from "../git/repo-parser.js";
 import { GitWorktreeManager, type WorktreeTarget } from "../git/worktree.js";
 import { GitHubService, type PullRequestResult } from "../git/github.js";
-import {
-  hasCustomStatuses,
-  parsePhaseFromSummary,
-  formatSummaryWithPhase,
-  getNextPhaseTag,
-  PHASE_TAGS,
-  isInvestigationIssue,
-  isFastModeIssue,
-} from "../backlog/prefix-helper.js";
 import { QuotaLockManager, parseResetDuration } from "./quota-lock.js";
 import { loadWorkflow } from "../workflow/loader.js";
 import { WorkflowEngine } from "../workflow/engine.js";
 import { PermissionGuard, type GitSnapshot } from "../workflow/permission.js";
 import { parseDecision } from "../workflow/decision.js";
+import type { WorkflowStep } from "../workflow/types.js";
+import {
+  PHASE_TAGS,
+  formatSummaryWithPhase,
+  parsePhaseFromSummary,
+  isInvestigationIssue,
+  isFastModeIssue,
+  stripPhasePrefix,
+  getNextPhaseTag,
+  hasCustomStatuses,
+} from "../tracker/prefix-helper.js";
 
 export interface ProcessIssueResult {
   handled: boolean;
@@ -62,8 +64,54 @@ export function hasHumanEscalationRequest(output: string): boolean {
   );
 }
 
+/**
+ * 任意のチケットオブジェクトを BTS 共通の TrackedIssue に透過変換するヘルパー (後方互換性対応)
+ */
+export function ensureTrackedIssue(issue: TrackedIssue | object | unknown): TrackedIssue {
+  if (issue && typeof issue === "object" && "key" in issue && "lifecycleState" in issue) {
+    return issue as TrackedIssue;
+  }
+  const obj = (issue && typeof issue === "object" ? issue : {}) as Record<string, unknown>;
+  const key = (typeof obj.key === "string" ? obj.key : undefined) || (typeof obj.issueKey === "string" ? obj.issueKey : undefined) || "ISSUE-1";
+  const rawTitle = (typeof obj.rawTitle === "string" ? obj.rawTitle : undefined) || (typeof obj.summary === "string" ? obj.summary : "") || "";
+  const title = stripPhasePrefix(rawTitle);
+  const statusObj = obj.status as { name?: string } | undefined;
+  const rawStatusName = (typeof obj.rawStatusName === "string" ? obj.rawStatusName : undefined) || statusObj?.name || "未対応";
+  const description = typeof obj.description === "string" ? obj.description : "";
+  const recentComments = Array.isArray(obj.recentComments)
+    ? (obj.recentComments as string[])
+    : [];
+
+  const issueTypeObj = obj.issueType as { name?: string } | undefined;
+  const isInvestigation =
+    typeof obj.isInvestigation === "boolean"
+      ? obj.isInvestigation
+      : (/\[(?:調査|検討|設計|research|investigation)\]/i.test(rawTitle) ||
+          issueTypeObj?.name === "調査");
+  const isFastMode =
+    typeof obj.isFastMode === "boolean"
+      ? obj.isFastMode
+      : (/\[fast\]/i.test(rawTitle) || /mode:\s*fast/i.test(description));
+
+  return {
+    key,
+    id: (typeof obj.id === "number" || typeof obj.id === "string") ? obj.id : undefined,
+    title,
+    rawTitle,
+    description,
+    currentStepName: typeof obj.currentStepName === "string" ? obj.currentStepName : undefined,
+    currentStepDef: obj.currentStepDef as WorkflowStep | undefined,
+    lifecycleState: (obj.lifecycleState as IssueLifecycleState) || "in_progress",
+    rawStatusName,
+    recentComments,
+    isInvestigation,
+    isFastMode,
+    updatedAt: (typeof obj.updatedAt === "string" ? obj.updatedAt : undefined) || (typeof obj.updated === "string" ? obj.updated : undefined) || new Date().toISOString(),
+  };
+}
+
 export class AgentDispatcher {
-  private backlog: BacklogClient;
+  private tracker?: IIssueTracker;
   private runner: IAgentRunner;
   private defaultRepoPath: string;
   private dryRun: boolean;
@@ -79,7 +127,7 @@ export class AgentDispatcher {
   private permissionGuard: PermissionGuard;
 
   constructor(
-    backlog: BacklogClient,
+    trackerOrClient: IIssueTracker | object,
     runner: IAgentRunner,
     defaultRepoPath: string,
     dryRun: boolean = false,
@@ -92,7 +140,7 @@ export class AgentDispatcher {
     requireHumanSpecApproval: boolean = false,
     permissionGuard?: PermissionGuard
   ) {
-    this.backlog = backlog;
+    this.tracker = wrapLegacyIssueClient(trackerOrClient, customStatusModeOverride);
     this.runner = runner;
     this.defaultRepoPath = defaultRepoPath;
     this.dryRun = dryRun;
@@ -104,6 +152,14 @@ export class AgentDispatcher {
     this.quotaLockManager = quotaLockManager;
     this.requireHumanSpecApproval = requireHumanSpecApproval;
     this.permissionGuard = permissionGuard || new PermissionGuard();
+  }
+
+  getTracker(): IIssueTracker | undefined {
+    return this.tracker;
+  }
+
+  setTracker(tracker: IIssueTracker): void {
+    this.tracker = tracker;
   }
 
   getPermissionGuard(): PermissionGuard {
@@ -146,11 +202,20 @@ export class AgentDispatcher {
     this.customStatusModeOverride = enabled;
   }
 
-  isCustomStatusMode(projectStatuses: BacklogStatus[]): boolean {
+  isCustomStatusMode(statuses?: Array<{ name: string }> | unknown[]): boolean {
     if (this.customStatusModeOverride !== undefined) {
       return this.customStatusModeOverride;
     }
-    return hasCustomStatuses(projectStatuses);
+    if (this.tracker?.isCustomStatusMode && this.tracker.isCustomStatusMode()) {
+      return true;
+    }
+    if (Array.isArray(statuses) && statuses.length > 0) {
+      const first = statuses[0];
+      if (first && typeof first === "object" && "name" in first && typeof (first as { name: unknown }).name === "string") {
+        return hasCustomStatuses(statuses as Array<{ name: string }>);
+      }
+    }
+    return false;
   }
 
   getRejectionCount(issueKey: string): number {
@@ -161,21 +226,30 @@ export class AgentDispatcher {
     this.rejectionCounts.delete(issueKey);
   }
 
-  resolveRole(issue: BacklogIssue, projectStatuses: BacklogStatus[]): AgentRole | null {
-    if (this.isCustomStatusMode(projectStatuses)) {
-      return this.resolveRoleFromStatus(issue.status.name);
+  resolveRole(
+    issueInput: TrackedIssue | object,
+    statuses?: Array<{ name: string }> | unknown[]
+  ): AgentRole | string | null {
+    const issue = ensureTrackedIssue(issueInput);
+    if (this.isCustomStatusMode(statuses)) {
+      if (issue.currentStepName) {
+        return issue.currentStepDef?.role || issue.currentStepName;
+      }
+      return this.resolveRoleFromStatus(issue.rawStatusName);
     }
     return this.resolveRoleFromSummary(issue);
   }
 
-  resolveRoleFromSummary(issue: BacklogIssue): AgentRole | null {
-    const statusName = issue.status.name;
+  resolveRoleFromSummary(issueInput: TrackedIssue | object | unknown): AgentRole | null {
+    const tracked = ensureTrackedIssue(issueInput);
+    const statusName = tracked.rawStatusName;
+    const summary = tracked.rawTitle || tracked.title;
     // プレフィックスモードでは「処理中」または「未対応」を対象とする
     if (!statusName.includes("処理中") && !statusName.includes("未対応")) {
       return null;
     }
 
-    const parsed = parsePhaseFromSummary(issue.summary);
+    const parsed = parsePhaseFromSummary(summary);
 
     // [設計承認待ち] タグが付いている場合:
     if (parsed.tag === PHASE_TAGS.specApprovalWait) {
@@ -198,7 +272,7 @@ export class AgentDispatcher {
       }
       // 人間が回答してステータスを「処理中」に変更した場合は再開
       // 直前のロールがあればそれを再開ロールとし、なければデフォルト "spec-writer"
-      return this.lastRoleMap.get(issue.issueKey) || "spec-writer";
+      return this.lastRoleMap.get(tracked.key) || "spec-writer";
     }
 
     // [要件レビュー完了] または [調査完了] の場合:
@@ -206,8 +280,7 @@ export class AgentDispatcher {
       // 人間がレビュー後に差し戻してステータスを「処理中」に変更した場合:
       // 調査タスクなら再調査・設計修正 (spec-writer)、実装タスクなら実装修正 (developer) を再開
       if (statusName.includes("処理中")) {
-        const isInvestigation = isInvestigationIssue(issue);
-        return isInvestigation ? "spec-writer" : "developer";
+        return tracked.isInvestigation ? "spec-writer" : "developer";
       }
       return null;
     }
@@ -219,8 +292,7 @@ export class AgentDispatcher {
     // タグがなく「処理中」になっている場合:
     // Fastモードなら初期ロールは developer (実装)、それ以外は spec-writer (詳細仕様策定)
     if (statusName.includes("処理中")) {
-      const isFast = isFastModeIssue(issue);
-      return isFast ? "developer" : "spec-writer";
+      return tracked.isFastMode ? "developer" : "spec-writer";
     }
 
     return null;
@@ -291,16 +363,6 @@ export class AgentDispatcher {
     }
   }
 
-  findStatusIdByName(statuses: BacklogStatus[], targetName: string): number | null {
-    const targetLower = targetName.toLowerCase();
-    const exact = statuses.find((st) => st.name.toLowerCase() === targetLower);
-    if (exact) return exact.id;
-
-    const partial = statuses.find((st) => st.name.toLowerCase().includes(targetLower));
-    if (partial) return partial.id;
-
-    return null;
-  }
 
   /**
    * PR作成後・レビュー完了時に、人間が手元で動作確認（検証）するための手順案内を生成する
@@ -429,32 +491,45 @@ export class AgentDispatcher {
     return lines;
   }
 
-  async processIssue(issue: BacklogIssue, projectStatuses: BacklogStatus[]): Promise<ProcessIssueResult> {
-    const statusName = issue.status.name;
-    const role = this.resolveRole(issue, projectStatuses);
+  async processIssue(
+    issueInput: TrackedIssue | object,
+    statuses?: Array<{ name: string }> | unknown[]
+  ): Promise<ProcessIssueResult> {
+    if (this.tracker?.setProjectStatuses && Array.isArray(statuses) && statuses.length > 0) {
+      this.tracker.setProjectStatuses(statuses);
+    }
+    const issue = ensureTrackedIssue(issueInput);
+    const issueKey = issue.key;
+    const issueSummary = issue.rawTitle || issue.title;
+    const issueDescription = issue.description || "";
+    const statusName = issue.rawStatusName;
+
+    const role = this.resolveRole(issue, statuses);
 
     if (!role) {
       return { handled: false };
     }
 
     console.log(`\n----------------------------------------`);
-    console.log(`[Dispatcher] 課題検知: ${issue.issueKey} [${issue.summary}]`);
+    console.log(`[Dispatcher] 課題検知: ${issueKey} [${issueSummary}]`);
     console.log(`[Dispatcher] 現在のステータス: "${statusName}" -> 担当エージェント: [${role}]`);
     console.log(`----------------------------------------`);
 
-    this.logger?.info("issue_detected", `課題検知: ${issue.issueKey} (${statusName})`, {
-      issueKey: issue.issueKey,
+    this.logger?.info("issue_detected", `課題検知: ${issueKey} (${statusName})`, {
+      issueKey,
       role,
-      data: { summary: issue.summary, status: statusName },
+      data: { summary: issueSummary, status: statusName },
     });
 
     // 1. チケット詳細から1つまたは複数のリポジトリパス/URLを抽出
-    const rawRepoPaths = extractRepositoryPaths(issue.description, this.defaultRepoPath);
+    const rawRepoPaths = extractRepositoryPaths(issueDescription, this.defaultRepoPath);
     if (rawRepoPaths.length === 0) {
       const errMsg = `リポジトリ情報をチケット詳細から検出できず、フォールバック設定もありません。詳細に「リポジトリ: <URLまたはパス>」を記載してください。`;
       console.error(`[Dispatcher] エラー: ${errMsg}`);
-      this.logger?.error("error", errMsg, { issueKey: issue.issueKey, role });
-      await this.backlog.addComment(issue.issueKey, `⚠️ **エラー**: ${errMsg}`).catch(() => {});
+      this.logger?.error("error", errMsg, { issueKey, role });
+      if (this.tracker) {
+        await this.tracker.addComment(issueKey, `⚠️ **エラー**: ${errMsg}`).catch(() => {});
+      }
       return { handled: false };
     }
 
@@ -465,54 +540,47 @@ export class AgentDispatcher {
     let executionWorkDir = "";
 
     try {
-      worktreeTargets = await this.worktreeManager.ensureWorktrees(rawRepoPaths, issue.issueKey);
+      worktreeTargets = await this.worktreeManager.ensureWorktrees(rawRepoPaths, issueKey);
 
       if (worktreeTargets.length === 1) {
         // 単一リポジトリの場合はその worktree ディレクトリを直接作業ルートに
         executionWorkDir = worktreeTargets[0].worktreeDir;
       } else {
         // 複数リポジトリの場合は各 worktree を内包するチケット用ルートディレクトリ
-        executionWorkDir = path.join(this.worktreeManager.getWorktreesDir(), issue.issueKey);
+        executionWorkDir = path.join(this.worktreeManager.getWorktreesDir(), issueKey);
       }
 
       console.log(`[Dispatcher] エージェント作業ディレクトリ: ${executionWorkDir}`);
       worktreeTargets.forEach((t) => {
         console.log(`  - [${t.repoName}] ${t.worktreeDir} (ブランチ: ${t.branch})`);
       });
-    } catch (wtErr: any) {
-      const errMsg = `git worktree の準備に失敗しました: ${wtErr.message}`;
+    } catch (wtErr: unknown) {
+      const msg = wtErr instanceof Error ? wtErr.message : String(wtErr);
+      const errMsg = `git worktree の準備に失敗しました: ${msg}`;
       console.error(`[Dispatcher] エラー: ${errMsg}`);
-      this.logger?.error("error", errMsg, { issueKey: issue.issueKey, role });
-      await this.backlog.addComment(issue.issueKey, `⚠️ **エラー**: ${errMsg}`).catch(() => {});
+      this.logger?.error("error", errMsg, { issueKey, role });
+      if (this.tracker) {
+        await this.tracker.addComment(issueKey, `⚠️ **エラー**: ${errMsg}`).catch(() => {});
+      }
       return { handled: false };
     }
 
     let recentComments: string[] = [];
     try {
-      if (typeof this.backlog.getComments === "function") {
-        const comments = await this.backlog.getComments(issue.issueKey, 5);
-        recentComments = comments
-          .filter((c) => c.content && c.content.trim().length > 0)
-          .map((c) => {
-            let text = (c.content || "").trim();
-            // 生の NDJSON ログなどノイズ文字列が混入している場合の防御
-            if (text.includes('{"event":') || text.includes('"step_update":')) {
-              text = "[システムログのため省略]";
-            } else if (text.length > 1500) {
-              text = text.slice(0, 1500) + "\n...[長文のため一部省略]...";
-            }
-            return `[${c.createdUser.name}]: ${text}`;
-          });
+      if (issue.recentComments && issue.recentComments.length > 0) {
+        recentComments = issue.recentComments;
+      } else if (this.tracker?.getRecentComments) {
+        recentComments = await this.tracker.getRecentComments(issueKey, 5);
       }
-    } catch (e) {
+    } catch (e: unknown) {
       console.warn(`[Dispatcher] コメント取得スキップ:`, e);
     }
 
-    const isInvestigation = isInvestigationIssue(issue);
-    const isFastMode = isFastModeIssue(issue);
+    const isInvestigation = issue.isInvestigation;
+    const isFastMode = issue.isFastMode;
 
     // ワークフロー定義の解決とステップ情報の取得
-    const projectKey = issue.issueKey.split("-")[0];
+    const projectKey = issueKey.split("-")[0];
     const workflowDef = loadWorkflow({
       isFastMode,
       isInvestigation,
@@ -524,14 +592,15 @@ export class AgentDispatcher {
     const editAllowed = currentStep ? currentStep.edit : (role === "spec-writer" || role === "developer");
 
     const context: AgentContext = {
-      issueKey: issue.issueKey,
-      issueSummary: issue.summary,
-      issueDescription: issue.description || "",
+      issueKey,
+      issueSummary,
+      issueDescription,
       recentComments,
       workDir: executionWorkDir,
       isInvestigation,
       isFastMode,
       readOnly: !editAllowed,
+      trackerType: this.tracker?.trackerType,
     };
 
     // 権限制御 (edit: false) の場合、実行前の Git 状態スナップショットを記録
@@ -545,8 +614,8 @@ export class AgentDispatcher {
 
     // 3. エージェント実行
     const startTime = Date.now();
-    this.logger?.info("agent_start", `エージェント [${role}] 実行開始 (チケット: ${issue.issueKey})`, {
-      issueKey: issue.issueKey,
+    this.logger?.info("agent_start", `エージェント [${role}] 実行開始 (チケット: ${issueKey})`, {
+      issueKey,
       role,
       data: {
         executionWorkDir,
@@ -554,7 +623,7 @@ export class AgentDispatcher {
       },
     });
 
-    const result = await this.runner.run(role, context);
+    const result = await this.runner.run(role as AgentRole, context);
     const durationMs = Date.now() - startTime;
 
     // 権限制御 (edit: false) の場合、実行後の状態を検証し不正変更があれば即時ロールバック
@@ -573,11 +642,11 @@ export class AgentDispatcher {
 
     const cumulativeTotals = TokenUsageTracker.getTotals();
     this.logger?.info("agent_finish", `エージェント [${role}] 実行完了 (${durationMs}ms)`, {
-      issueKey: issue.issueKey,
+      issueKey,
       role,
       durationMs,
-      usage: result.usage ? (result.usage as any) : undefined,
-      cumulativeTokens: cumulativeTotals as any,
+      usage: result.usage,
+      cumulativeTokens: cumulativeTotals,
       data: {
         success: result.success,
         isRejection: result.isRejection,
@@ -600,8 +669,8 @@ export class AgentDispatcher {
             console.log(`[Dispatcher] 未コミットの変更・ドキュメントを検出 (${target.repoName})。自動コミットします...`);
             await execAsync("git add -A", { cwd: target.worktreeDir });
             const commitMsg = isInvestigation
-              ? `docs(${role}): record investigation and design artifacts for ${issue.issueKey}`
-              : `chore(${role}): auto commit repository artifacts for ${issue.issueKey}`;
+              ? `docs(${role}): record investigation and design artifacts for ${issueKey}`
+              : `chore(${role}): auto commit repository artifacts for ${issueKey}`;
             await execAsync(`git commit -m "${commitMsg}"`, { cwd: target.worktreeDir });
           }
         } catch {
@@ -625,16 +694,16 @@ export class AgentDispatcher {
       prResults = await this.githubService.ensurePullRequests(
         worktreeTargets.map((t) => ({ repoName: t.repoName, worktreeDir: t.worktreeDir })),
         {
-          issueKey: issue.issueKey,
-          summary: issue.summary,
-          description: issue.description || "",
+          issueKey,
+          summary: issueSummary,
+          description: issueDescription,
           dryRun: this.dryRun,
         }
       );
 
       if (prResults.length > 0) {
         this.logger?.info("comment_posted", `GitHub PR準備完了 (${prResults.length}件)`, {
-          issueKey: issue.issueKey,
+          issueKey,
           role,
           data: { prs: prResults },
         });
@@ -647,7 +716,7 @@ export class AgentDispatcher {
 
     let isEscalation = false;
     let escalationReason = "";
-    let currentRejectionCount = this.getRejectionCount(issue.issueKey);
+    let currentRejectionCount = this.getRejectionCount(issueKey);
 
     let isQuota = false;
     let resetInfo: { durationSec: number; durationText: string } | null = null;
@@ -669,8 +738,8 @@ export class AgentDispatcher {
             ? new Date(Date.now() + resetInfo.durationSec * 1000).toISOString()
             : null;
           this.quotaLockManager.acquire({
-            role,
-            issueKey: issue.issueKey,
+            role: role as AgentRole,
+            issueKey,
             errorMessage: (output || result.summary).slice(0, 1000).trim(),
             resetsAt,
             resetDurationSec: resetInfo ? resetInfo.durationSec : null,
@@ -678,7 +747,7 @@ export class AgentDispatcher {
           });
           console.warn(`[Dispatcher] 🔒 クォータロックファイルを作成しました: ${this.quotaLockManager.getLockFilePath()}`);
           this.logger?.warn("quota_locked", `クォータ制限検知: ロックファイル作成 (${this.quotaLockManager.getLockFilePath()})`, {
-            issueKey: issue.issueKey,
+            issueKey,
             role,
             data: { resetsAt, resetInfo },
           });
@@ -688,8 +757,8 @@ export class AgentDispatcher {
       }
     } else if (result.isRejection) {
       currentRejectionCount += 1;
-      this.rejectionCounts.set(issue.issueKey, currentRejectionCount);
-      console.log(`[Dispatcher] 差し戻しを検知: ${issue.issueKey} (累計: ${currentRejectionCount} / 上限: ${this.maxRejectionCount})`);
+      this.rejectionCounts.set(issueKey, currentRejectionCount);
+      console.log(`[Dispatcher] 差し戻しを検知: ${issueKey} (累計: ${currentRejectionCount} / 上限: ${this.maxRejectionCount})`);
 
       if (currentRejectionCount >= this.maxRejectionCount) {
         isEscalation = true;
@@ -697,7 +766,7 @@ export class AgentDispatcher {
       }
     } else {
       // 承認または完了時は差し戻しカウンターをリセット
-      this.resetRejectionCount(issue.issueKey);
+      this.resetRejectionCount(issueKey);
     }
 
     if (hasExplicitHumanRequest) {
@@ -720,53 +789,56 @@ export class AgentDispatcher {
       !result.isRejection &&
       !isEscalation &&
       (isInvestigation ? role === "spec-reviewer" : (isFastMode ? role === "code-reviewer" : role === "requirement-reviewer"));
-    const isCustom = this.isCustomStatusMode(projectStatuses);
+    const isCustom = this.isCustomStatusMode(statuses);
 
-    // 次ステータスおよび件名の決定
+    // 次ステータスおよび表示名の決定
     let nextStatusTarget: string;
-    let newSummary: string | undefined;
-    let nextStatusId: number | null = null;
+    let nextStepDef: WorkflowStep | null = null;
+    let newSummary: string | undefined = undefined;
 
     if (isCustom) {
-      // 1. カスタム状態モード (上位プラン等)
       if (isEscalation) {
         nextStatusTarget = "確認待ち";
       } else if (isSpecApprovalWait) {
-        nextStatusTarget = "確認待ち";
+        nextStatusTarget = "設計承認待ち";
+      } else if (isFinalApproval) {
+        nextStatusTarget = "完了";
       } else {
-        nextStatusTarget = result.success
-          ? this.getNextStatusName(role, result.isRejection ?? false, isInvestigation, isFastMode)
-          : issue.status.name;
+        const nextStatusOrRole = this.getNextStatusName(role as AgentRole, result.isRejection ?? false, isInvestigation, isFastMode);
+        const nextRole = this.resolveRoleFromStatus(nextStatusOrRole) || nextStatusOrRole;
+        nextStepDef =
+          workflowDef.steps[nextRole] ||
+          Object.values(workflowDef.steps).find(
+            (s: WorkflowStep) => s.role === nextRole || s.name === nextRole || s.custom_status === nextStatusOrRole
+          ) || null;
+        nextStatusTarget = nextStepDef?.custom_status || (nextStepDef ? `[${nextStepDef.name}]` : nextStatusOrRole);
       }
-      nextStatusId = this.findStatusIdByName(projectStatuses, nextStatusTarget);
     } else {
-      // 2. 件名プレフィックス ＋ 標準ステータスモード (フリープラン等)
+      // プレフィックスモード
       if (isEscalation) {
         const nextPhaseTag = PHASE_TAGS.confirmHuman;
-        newSummary = formatSummaryWithPhase(issue.summary, nextPhaseTag);
+        newSummary = formatSummaryWithPhase(issueSummary, nextPhaseTag);
         nextStatusTarget = `[${nextPhaseTag}]`;
-        // 人間に気付かせるため標準ステータス「未対応」へ
-        nextStatusId = this.findStatusIdByName(projectStatuses, "未対応") || 1;
       } else {
         const nextPhaseTag = result.success
-          ? getNextPhaseTag(role, result.isRejection ?? false, isInvestigation, isFastMode, this.requireHumanSpecApproval)
-          : (parsePhaseFromSummary(issue.summary).tag || getNextPhaseTag(role, false, isInvestigation, isFastMode, this.requireHumanSpecApproval));
-        newSummary = formatSummaryWithPhase(issue.summary, nextPhaseTag);
+          ? getNextPhaseTag(role as AgentRole, result.isRejection ?? false, isInvestigation, isFastMode, this.requireHumanSpecApproval)
+          : (parsePhaseFromSummary(issueSummary).tag || getNextPhaseTag(role as AgentRole, false, isInvestigation, isFastMode, this.requireHumanSpecApproval));
+        newSummary = formatSummaryWithPhase(issueSummary, nextPhaseTag);
         nextStatusTarget = `[${nextPhaseTag}]`;
-        if (isFinalApproval) {
-          // 全工程完了時は人間レビュー待ちのため「処理済み」へ
-          nextStatusId = this.findStatusIdByName(projectStatuses, "処理済み") || 3;
-        } else if (isSpecApprovalWait) {
-          // 人間の設計承認待ち時は「未対応」へ
-          nextStatusId = this.findStatusIdByName(projectStatuses, "未対応") || 1;
-        } else {
-          // AIリレー中は「処理中」を維持
-          nextStatusId = this.findStatusIdByName(projectStatuses, "処理中") || 2;
+
+        if (!isFinalApproval && !isSpecApprovalWait) {
+          const nextStatusOrRole = this.getNextStatusName(role as AgentRole, result.isRejection ?? false, isInvestigation, isFastMode);
+          const nextRole = this.resolveRoleFromStatus(nextStatusOrRole) || nextStatusOrRole;
+          nextStepDef =
+            workflowDef.steps[nextRole] ||
+            Object.values(workflowDef.steps).find(
+              (s: WorkflowStep) => s.role === nextRole || s.name === nextRole || s.custom_status === nextStatusOrRole
+            ) || null;
         }
       }
     }
 
-    // 6. Backlog コメント文面の構築
+    // 6. チケットコメント文面の構築
     const commentLines: string[] = [];
 
     // 権限制御によるロールバックが発生した場合、コメント冒頭に注意喚起を明記
@@ -793,7 +865,7 @@ export class AgentDispatcher {
       let resumeRole: AgentRole;
       if (!result.success) {
         // エージェント実行失敗（quota上限やエラー）時は、同じフェーズを再試行するため同一ロールを設定
-        resumeRole = role;
+        resumeRole = role as AgentRole;
       } else if (currentRejectionCount >= this.maxRejectionCount) {
         // 差し戻し上限によるエスカレーション時は修正担当ロールへ戻す
         resumeRole =
@@ -801,15 +873,15 @@ export class AgentDispatcher {
             ? "spec-writer"
             : role === "code-reviewer" || role === "requirement-reviewer"
             ? "developer"
-            : role;
+            : (role as AgentRole);
       } else {
         // エージェントからの質問・確認要請の場合は同一ロールで回答を受け取る
-        resumeRole = role;
+        resumeRole = role as AgentRole;
       }
-      this.lastRoleMap.set(issue.issueKey, resumeRole);
+      this.lastRoleMap.set(issueKey, resumeRole);
       console.warn(`[Dispatcher] ⚠️ 人間への確認依頼（エスカレーション）を検知: ${escalationReason}`);
-      this.logger?.warn("human_escalation", `人間への確認依頼: ${issue.issueKey} (${escalationReason})`, {
-        issueKey: issue.issueKey,
+      this.logger?.warn("human_escalation", `人間への確認依頼: ${issueKey} (${escalationReason})`, {
+        issueKey,
         role,
         data: {
           reason: escalationReason,
@@ -833,7 +905,7 @@ export class AgentDispatcher {
 
       let restartGuide: string;
       if (isQuota) {
-        restartGuide = `1. **【自動再開（推奨）】**: デーモンがローカルでクォータ回復待機モードに入りました（Backlogポーリング休止中）。クォータ回復（リセット予定: ${resetInfo?.durationText || "時間経過"}）が確認され次第、本チケットは自動的に再開されます（手動操作は不要です）。\n2. **【手動再開】**: 直ちに再開させたい場合は、クォータロックファイル（\`.aidevflow.quota.lock\`）を削除し、ステータスを **「処理中」** に変更してください。`;
+        restartGuide = `1. **【自動再開（推奨）】**: デーモンがローカルでクォータ回復待機モードに入りました（BTSポーリング休止中）。クォータ回復（リセット予定: ${resetInfo?.durationText || "時間経過"}）が確認され次第、本チケットは自動的に再開されます（手動操作は不要です）。\n2. **【手動再開】**: 直ちに再開させたい場合は、クォータロックファイル（\`.aidevflow.quota.lock\`）を削除し、ステータスを **「処理中」** に変更してください。`;
       } else if (!result.success) {
         restartGuide = `1. エラー内容（設定・コード・環境）をご確認ください。\n2. 再開準備が整ったら、ステータスを **「処理中」** に変更してください。\n3. デーモンが検知し、エージェント [${role}] から自動再開します。`;
       } else {
@@ -868,12 +940,12 @@ export class AgentDispatcher {
       commentLines.push(
         `### ⏸️ 【設計承認のお願い】AIによる詳細設計および設計レビューが完了しました`,
         ``,
-        `チケット **${issue.issueKey}: ${newSummary || issue.summary}** に対する詳細設計（spec-writer）および設計レビュー（spec-reviewer）が承認（LGTM）されました。`,
+        `チケット **${issueKey}: ${newSummary || issueSummary}** に対する詳細設計（spec-writer）および設計レビュー（spec-reviewer）が承認（LGTM）されました。`,
         ``,
         `実装フェーズ（developer）へ進む前に、設計内容のご確認とご承認をお願いいたします。`,
         ``,
         ...prSectionLines,
-        `- **ブランチ**: \`${issue.issueKey}\``,
+        `- **ブランチ**: \`${issueKey}\``,
         `- **作業 Worktree**: \`${executionWorkDir}\``,
         `- **ステータス**: ${nextStatusTarget}`,
         ...(newSummary ? [`- **新件名**: \`${newSummary}\``] : []),
@@ -887,26 +959,42 @@ export class AgentDispatcher {
         `- **【設計に問題がない場合 (実装開始)】**:`,
         `  1. リポジトリ内の詳細設計書（\`docs/detailed_design.md\` や PR 差分等）をご確認ください。`,
         `  2. 本チケットのステータスを **「処理中」** に変更してください。`,
-        `     - デーモンが検知し、自動的に \`developer\`（実装）が実装フェーズを開始します。`,
-        `- **【設計の修正・方針変更を指示する場合 (AIに再設計させる)】**:`,
-        `  1. 本チケットのコメント欄に修正指示（「〇〇ではなく△△にして」「Bの要件は××で」等）を記入してください。`,
+        `     - デーモンが検知し、自動的に \`developer\` が実装を開始します。`,
+        `- **【修正や方針変更を指示する場合 (AIに再設計させる)】**:`,
+        `  1. 本チケットのコメント欄に修正指示やフィードバックを記入してください。`,
         `  2. ステータスを **「処理中」** に変更してください。`,
-        `     - （※抜本的な設計見直しを行いたい場合は、件名を \`[詳細設計中]\` に変更してください）`
+        `     - デーモンがコメントを検知し、\`spec-writer\` が設計書の修正を行います。`
       );
     } else if (isFinalApproval) {
       if (isInvestigation) {
+        const prListDesc = prResults.length > 0
+          ? [
+              ...prSectionLines,
+              `- **ブランチ**: \`${issueKey}\``,
+              `- **作業 Worktree**: \`${executionWorkDir}\``,
+            ]
+          : [];
+
         commentLines.push(
           `### 【調査完了報告】AIエージェントによる調査・設計フェーズが完了しました`,
           ``,
-          `チケット **${issue.issueKey}: ${newSummary || issue.summary}** に対する調査・検討・設計工程（spec-writer 調査・仕様策定 → spec-reviewer 調査・仕様レビュー）が完了しました。`,
+          `チケット **${issueKey}: ${newSummary || issueSummary}** に対する調査・検討・設計工程（spec-writer 調査・仕様策定 → spec-reviewer 調査・仕様レビュー）が完了しました。`,
           ``,
-          ...prSectionLines,
-          `- **ブランチ**: \`${issue.issueKey}\``,
-          `- **作業 Worktree**: \`${executionWorkDir}\``,
+          ...prListDesc,
           `- **ステータス**: ${nextStatusTarget}`,
           ...(newSummary ? [`- **新件名**: \`${newSummary}\``] : []),
+          ...(result.usage?.totalTokens
+            ? [
+                `- **最終フェーズ消費トークン**: 入力: ${result.usage.inputTokens?.toLocaleString()} / 出力: ${result.usage.outputTokens?.toLocaleString()} (思考: ${result.usage.thinkingTokens?.toLocaleString() || 0}) / 合計: ${result.usage.totalTokens?.toLocaleString()} tokens`,
+              ]
+            : []),
+          ...(TokenUsageTracker.getTotals().totalTokens > 0
+            ? [
+                `- **累計トークン消費 (全セッション計)**: ${TokenUsageTracker.getTotals().totalTokens.toLocaleString()} tokens (${TokenUsageTracker.getTotals().sessionCount}回実行)`,
+              ]
+            : []),
           ``,
-          `#### 調査・仕様レビュー報告:`,
+          `#### 調査結果・仕様書要約:`,
           result.output,
           ``,
           `---`,
@@ -925,7 +1013,7 @@ export class AgentDispatcher {
         const verificationGuide = this.generateVerificationGuide(
           worktreeTargets,
           executionWorkDir,
-          issue.issueKey
+          issueKey
         );
 
         const phaseProcessDesc = isFastMode
@@ -951,12 +1039,12 @@ export class AgentDispatcher {
         commentLines.push(
           `### 【レビュー依頼】AIエージェントによる全工程が完了しました`,
           ``,
-          `チケット **${issue.issueKey}: ${newSummary || issue.summary}** に対する${phaseProcessDesc}が完了しました。`,
+          `チケット **${issueKey}: ${newSummary || issueSummary}** に対する${phaseProcessDesc}が完了しました。`,
           ``,
           `以下のプルリクエストをご確認の上、レビュー・マージをお願いいたします。`,
           ``,
           ...prSectionLines,
-          `- **ブランチ**: \`${issue.issueKey}\``,
+          `- **ブランチ**: \`${issueKey}\``,
           `- **作業 Worktree**: \`${executionWorkDir}\``,
           `- **ステータス**: ${nextStatusTarget}`,
           ...(newSummary ? [`- **新件名**: \`${newSummary}\``] : []),
@@ -996,7 +1084,7 @@ export class AgentDispatcher {
         guideLines.push(
           ``,
           `---`,
-          ...this.generateVerificationGuide(worktreeTargets, executionWorkDir, issue.issueKey)
+          ...this.generateVerificationGuide(worktreeTargets, executionWorkDir, issueKey)
         );
       }
 
@@ -1011,7 +1099,7 @@ export class AgentDispatcher {
       commentLines.push(
         `### [AI] aidevflow [${role}] 処理報告`,
         `**結果**: ${resultLabel}`,
-        `**ブランチ**: \`${issue.issueKey}\``,
+        `**ブランチ**: \`${issueKey}\``,
         ...prSectionLines,
         `**所要時間**: ${(durationMs / 1000).toFixed(1)}s`,
         ...(usageDetail ? [usageDetail] : []),
@@ -1027,7 +1115,7 @@ export class AgentDispatcher {
     const commentBody = commentLines.filter(Boolean).join("\n");
 
     if (this.dryRun) {
-      console.log(`[DRY_RUN] Backlog更新をスキップしました (次ステータス: ${nextStatusTarget}, statusId: ${nextStatusId}, newSummary: ${newSummary || "なし"})`);
+      console.log(`[DRY_RUN] BTS更新をスキップしました (次ステータス: ${nextStatusTarget}, newSummary: ${newSummary || "なし"})`);
       console.log(`[DRY_RUN] コメント内容:\n`, commentBody);
       return {
         handled: true,
@@ -1039,71 +1127,50 @@ export class AgentDispatcher {
       };
     }
 
-    // 7. Backlog 課題更新 & コメント投稿
+    // 7. BTS 課題更新 & コメント投稿
     try {
-      if (isCustom) {
-        if (nextStatusId && nextStatusId !== issue.status.id) {
-          console.log(`[Dispatcher] Backlog ステータス更新中: ${issue.status.name} -> ${nextStatusTarget} (id=${nextStatusId})`);
-          if (typeof this.backlog.updateIssue === "function") {
-            await this.backlog.updateIssue(issue.issueKey, { statusId: nextStatusId, comment: commentBody });
-          } else {
-            await this.backlog.updateIssueStatus(issue.issueKey, nextStatusId, commentBody);
-          }
-          console.log(`[Dispatcher] ステータス更新 & コメント投稿完了!`);
-
-          this.logger?.info("status_updated", `ステータス更新: ${issue.status.name} -> ${nextStatusTarget}`, {
-            issueKey: issue.issueKey,
-            role,
-            data: {
-              previousStatus: issue.status.name,
-              nextStatus: nextStatusTarget,
-              nextStatusId,
-              prs: prResults,
-            },
-          });
-        } else {
-          console.log(`[Dispatcher] 該当するステータスIDが見つからないか同一のため、コメントのみ投稿します。`);
-          await this.backlog.addComment(issue.issueKey, commentBody);
-          console.log(`[Dispatcher] コメント投稿完了!`);
-
-          this.logger?.info("comment_posted", `コメント投稿完了`, {
-            issueKey: issue.issueKey,
-            role,
-            data: { prs: prResults },
-          });
-        }
-      } else {
-        // 件名プレフィックスモード
-        console.log(`[Dispatcher] Backlog 更新中 (件名プレフィックスモード): 件名="${newSummary}", ステータスID=${nextStatusId}`);
-        if (typeof this.backlog.updateIssue === "function") {
-          await this.backlog.updateIssue(issue.issueKey, {
-            summary: newSummary,
-            statusId: nextStatusId || undefined,
+      if (this.tracker) {
+        if (isEscalation) {
+          await this.tracker.updateLifecycle(issueKey, "waiting_confirmation", {
+            reason: escalationReason,
             comment: commentBody,
-          });
-        } else if (nextStatusId) {
-          await this.backlog.updateIssueStatus(issue.issueKey, nextStatusId, commentBody);
-        } else {
-          await this.backlog.addComment(issue.issueKey, commentBody);
-        }
-        console.log(`[Dispatcher] 件名・ステータス更新 & コメント投稿完了!`);
-
-        this.logger?.info("status_updated", `件名・ステータス更新: ${issue.summary} -> ${newSummary} (statusId=${nextStatusId})`, {
-          issueKey: issue.issueKey,
-          role,
-          data: {
-            previousSummary: issue.summary,
             newSummary,
-            previousStatus: issue.status.name,
-            nextStatusId,
-            prs: prResults,
-          },
-        });
+          });
+        } else if (isSpecApprovalWait) {
+          await this.tracker.updateLifecycle(issueKey, "waiting_approval", {
+            comment: commentBody,
+            newSummary,
+          });
+        } else if (isFinalApproval) {
+          await this.tracker.updateLifecycle(issueKey, "completed", {
+            comment: commentBody,
+            newSummary,
+          });
+        } else {
+          const nextStatusOrRole = this.getNextStatusName(role as AgentRole, result.isRejection ?? false, isInvestigation, isFastMode);
+          const nextRole = this.resolveRoleFromStatus(nextStatusOrRole) || nextStatusOrRole;
+          const nextStepDef =
+            workflowDef.steps[nextRole] ||
+            Object.values(workflowDef.steps).find(
+              (s) => s.role === nextRole || s.name === nextRole || s.custom_status === nextStatusOrRole
+            );
+
+          if (nextStepDef) {
+            await this.tracker.updateIssueStep(issueKey, nextStepDef, {
+              comment: commentBody,
+              newSummary,
+            });
+          } else {
+            await this.tracker.addComment(issueKey, commentBody);
+          }
+        }
+        console.log(`[Dispatcher] IIssueTracker 経由のステータス更新 & コメント投稿完了!`);
       }
-    } catch (err: any) {
-      console.error(`[Dispatcher] Backlog更新エラー:`, err);
-      this.logger?.error("error", `Backlog更新失敗: ${err.message}`, {
-        issueKey: issue.issueKey,
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[Dispatcher] 課題更新エラー:`, err);
+      this.logger?.error("error", `課題更新失敗: ${errMsg}`, {
+        issueKey,
         role,
       });
       throw err;

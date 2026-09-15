@@ -1,8 +1,8 @@
-# aidevflow: Backlog-driven AI Agent Pipeline Daemon
+# aidevflow: Issue-driven AI Agent Pipeline Daemon
 
-Backlog のチケット状態に応じて、人間の開発フローに沿った 5 つの専門 AI エージェントを自律リレーさせ、**複数リポジトリの修正から GitHub プルリクエスト（PR）作成までを完全自動化** する TypeScript 常駐デーモンです。
+課題管理システム（BTS: Backlog / 将来的に GitHub Issues 等）のチケット状態に応じて、人間の開発フローに沿った専門 AI エージェントを自律リレーさせ、**複数リポジトリの修正から GitHub プルリクエスト（PR）作成までを完全自動化** する TypeScript 常駐デーモンです。
 
-エージェント実行ランナーは `IAgentRunner` として抽象化されており、現在は個人検証用として **Google Antigravity CLI (`agy`)** を使用していますが、社内運用時には社内標準の **Anthropic Claude Code (`claude` CLI)** に切り替えて安全に稼働できるマルチランナー設計となっています（業界動向や比較は [docs/agentic_sdlc_landscape.md](docs/agentic_sdlc_landscape.md) 参照）。
+課題管理システムは `IIssueTracker`（`BacklogTracker` / テスト用 `MockIssueTracker`）として疎結合に抽象化されており、さらにエージェント実行ランナーも `IAgentRunner`（Google Antigravity CLI `agy` / Anthropic Claude Code `claude` / `mock`）として抽象化されています。これにより、外部 BTS や LLM 基盤に依存しないポータブルで堅牢なパイプライン稼働を実現しています。
 
 参考: [食べログ技術ブログ - 対話型をやめて1度の指示でPRができる。人間の開発フローに沿って5つの役割をリレーするAIエージェントパイプラインの設計](https://tech-blog.tabelog.com/entry/autonomous-ai-agent-pipeline-cost-verification_55)
 
@@ -179,4 +179,6 @@ workflows/
   - 差し戻し無限ループ防止 (`MAX_REJECTION_COUNT`)、AIからの質問エスカレーション (`【人間への確認依頼】`)、LLM クォータ制限時の安全停止と自動・手動復帰手順、二重起動防止ロック
 - 🎼 **[宣言的ワークフローエンジン & 権限制御設計書](docs/declarative_workflow_engine_design.md)**
   - TAKT および Just Do It (jdi) の思想を統合した YAML 宣言的ステップ定義、決定キーワード（`<!-- DECISION: ... -->`）による堅牢なルーティング、レビュアー権限制御（`edit: false`）による多層防御アーキテクチャ
+- 🧩 **[Issue Tracker (BTS) 抽象化設計書](docs/issue_tracker_abstraction.md)**
+  - 課題管理システム（BTS）の密結合を解消する `IIssueTracker` 抽象レイヤー設計。宣言的ワークフロー（`workflow.yaml`）と連動する動的ステップマッピング、`BacklogTracker` アダプター、テスト用 `MockIssueTracker` による高速検証アーキテクチャ
 

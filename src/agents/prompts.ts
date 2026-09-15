@@ -85,8 +85,30 @@ ${list}
 ※エスカレーション不要な場合は <!-- DECISION: HUMAN_REQUIRED --> を絶対に出力しないでください。`.trim();
 }
 
+function buildTrackerCliInstruction(context: AgentContext): string {
+  const type = context.trackerType || "backlog";
+  if (type === "backlog") {
+    return `
+=== Backlog CLI (bee) ===
+Backlog 公式 CLI \`bee\` が利用可能です。必要に応じて課題詳細や過去コメントの調査に活用してください:
+- 課題詳細の確認: \`bee issue view ${context.issueKey}\`
+- コメント一覧の確認: \`bee issue comment ${context.issueKey} --list\`
+`.trim();
+  }
+  if (type === "github") {
+    return `
+=== GitHub CLI (gh) ===
+GitHub 公式 CLI \`gh\` が利用可能です。必要に応じて課題詳細や過去コメントの調査に活用してください:
+- 課題詳細の確認: \`gh issue view ${context.issueKey}\`
+- コメント一覧の確認: \`gh issue view ${context.issueKey} --comments\`
+`.trim();
+  }
+  return "";
+}
+
 export function buildAgentPrompt(role: AgentRole, context: AgentContext): string {
   const commentsText = compressRecentComments(context.recentComments);
+  const trackerCliSection = buildTrackerCliInstruction(context);
 
   const baseHeader = `
 === タスク情報 ===
@@ -98,12 +120,7 @@ ${context.issueDescription}
 
 === 直近の経緯・コメント ===
 ${commentsText}
-
-=== Backlog CLI (bee) ===
-Backlog 公式 CLI \`bee\` が利用可能です。必要に応じて課題詳細や過去コメントの調査に活用してください:
-- 課題詳細の確認: \`bee issue view ${context.issueKey}\`
-- コメント一覧の確認: \`bee issue comment ${context.issueKey} --list\`
-
+${trackerCliSection ? `\n${trackerCliSection}\n` : ""}
 === プロジェクト固有の規約・非機能要件 (AGENTS.md) ===
 作業対象リポジトリ直下に \`AGENTS.md\`（または \`CLAUDE.md\`、\`GEMINI.md\`）が存在する場合、そこに記載されたプロジェクト共通の規約、非機能要件（LAN/ネットワークアクセス、Docker設定、外部サービス・共通クライアント、DBマイグレーション方針、バージョン固定規約等）は【絶対遵守ルール】です。
 必ず最優先で確認し、設計・実装・レビューのすべてのフェーズでその規約に従ってください。
@@ -251,7 +268,7 @@ ${buildDecisionInstruction([
 ※本タスクでは迅速なデリバリーとクォータ最適化のため、技術的観点と要件充足度のレビューを1回に統合して実施します。
 
 【役割】
-developerの実装したコードに対して、技術的品質（バグ・セキュリティ・型安全性・規約・テスト品質・言語やライブラリのバージョン妥当性・ベースブランチとのコンフリクト有無）および Backlog チケット要件の充足度の双方をゼロベースでレビューしてください。
+developerの実装したコードに対して、技術的品質（バグ・セキュリティ・型安全性・規約・テスト品質・言語やライブラリのバージョン妥当性・ベースブランチとのコンフリクト有無）およびチケット（課題）要件の充足度の双方をゼロベースでレビューしてください。
 
 【実施事項】
 1. git diff または実装コードを検査し、技術的懸念や要件との差分を洗い出す
@@ -300,7 +317,7 @@ ${buildDecisionInstruction([
 
 あなたは【requirement-reviewer（要件的観点レビューエージェント）】です。
 【役割】
-実装された成果物が、元のBacklogチケットの要件や設計書の意図を満たしているかをレビューしてください。
+実装された成果物が、元のチケット（課題）要件や設計書の意図を満たしているかをレビューしてください。
 【実施事項】
 1. チケットの要件がすべて満たされているか、機能漏れがないか照合する
 2. ベースブランチとの競合やコンフリクトマーカーの残留など、成果物のマージを阻害する不整合がないか確認する

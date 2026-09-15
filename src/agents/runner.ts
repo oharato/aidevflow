@@ -24,9 +24,21 @@ export function parseAgyUsageJson(jsonStr: string): QuotaUsageInfo | null {
     const groupsRaw = data.command?.data?.groups;
     if (!Array.isArray(groupsRaw)) return null;
 
-    const groups: QuotaGroupInfo[] = groupsRaw.map((g: any) => ({
+    interface RawBucket {
+      id?: string;
+      name?: string;
+      window?: string;
+      remaining_fraction?: number;
+      reset_time?: string;
+    }
+    interface RawGroup {
+      name?: string;
+      buckets?: RawBucket[];
+    }
+
+    const groups: QuotaGroupInfo[] = (groupsRaw as RawGroup[]).map((g) => ({
       name: g.name || "Unknown",
-      buckets: (g.buckets || []).map((b: any) => ({
+      buckets: (g.buckets || []).map((b) => ({
         id: b.id || "",
         name: b.name || "",
         window: b.window || "",
@@ -401,8 +413,9 @@ export class AgyRunner implements IAgentRunner {
           quotaUsage: quotaInfo,
         };
       }
-    } catch (err: any) {
-      console.warn(`[AgyRunner] /usage によるクォータ確認で例外: ${err.message}。ping フォールバックを実行します。`);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`[AgyRunner] /usage によるクォータ確認で例外: ${errMsg}。ping フォールバックを実行します。`);
     }
 
     // フォールバック: 従来の軽量 ping チェック

@@ -1,15 +1,25 @@
-import childProcess from "child_process";
+import childProcess, { type ExecOptions } from "child_process";
 import { promisify } from "util";
 import fs from "fs";
 import { READONLY_INSTRUCTION } from "./types.js";
 
 export { READONLY_INSTRUCTION };
 
-type ExecAsyncFn = (cmd: string, options?: any) => Promise<{ stdout: string; stderr: string }>;
+export type ExecAsyncFn = (
+  cmd: string,
+  options?: ExecOptions
+) => Promise<{ stdout: string; stderr: string }>;
 
 function getDefaultExecAsync(): ExecAsyncFn {
   if (typeof childProcess?.exec === "function") {
-    return promisify(childProcess.exec) as any;
+    const execAsync = promisify(childProcess.exec);
+    return async (cmd: string, options?: ExecOptions) => {
+      const res = await execAsync(cmd, options);
+      return {
+        stdout: String(res.stdout),
+        stderr: String(res.stderr),
+      };
+    };
   }
   return async () => ({ stdout: "", stderr: "" });
 }
@@ -142,9 +152,10 @@ export class PermissionGuard {
         reasons.push(
           `読み取り専用ステップ中に新しいコミット (${currentHead.slice(0, 7)}) が作成されたためロールバックしました`
         );
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
         console.error(`[PermissionGuard] ロールバック実行時エラー:`, err);
-        reasons.push(`コミットのロールバックに失敗しました: ${err.message}`);
+        reasons.push(`コミットのロールバックに失敗しました: ${errMsg}`);
       }
     } else if (hasUncommittedChanges) {
       console.warn(
@@ -157,9 +168,10 @@ export class PermissionGuard {
         reasons.push(
           "読み取り専用ステップ中に未コミットのファイル作成・編集が検知されたため変更を破棄しました"
         );
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
         console.error(`[PermissionGuard] 作業ツリークリーンアップエラー:`, err);
-        reasons.push(`変更の破棄に失敗しました: ${err.message}`);
+        reasons.push(`変更の破棄に失敗しました: ${errMsg}`);
       }
     }
 

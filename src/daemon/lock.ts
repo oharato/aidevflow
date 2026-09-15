@@ -24,9 +24,9 @@ export function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch (err: any) {
+  } catch (err: unknown) {
     // EPERM の場合は他ユーザーのプロセスとして存在している
-    return err.code === "EPERM";
+    return (err as NodeJS.ErrnoException).code === "EPERM";
   }
 }
 
@@ -110,8 +110,8 @@ export class ProcessLock {
       });
       this.isAcquired = true;
       return { success: true, cleanedStaleLock };
-    } catch (err: any) {
-      if (err.code === "EEXIST") {
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
         // 瞬間的な競合で別プロセスが直前に作成した場合
         const existing = this.readLockMetadata();
         return {

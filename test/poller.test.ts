@@ -3,6 +3,8 @@ import { BacklogPoller } from "../src/daemon/poller.js";
 import { AgentDispatcher } from "../src/daemon/dispatcher.js";
 import { MockRunner } from "../src/agents/runner.js";
 import type { GitWorktreeManager } from "../src/git/worktree.js";
+import type { GitHubService } from "../src/git/github.js";
+import type { ResourceCleaner } from "../src/daemon/cleaner.js";
 import type { BacklogClient } from "../src/backlog/client.js";
 import type { BacklogIssue, BacklogStatus, BacklogProject } from "../src/backlog/types.js";
 
@@ -137,8 +139,8 @@ describe("BacklogPoller (プロジェクト走査)", () => {
     } as unknown as BacklogClient;
 
     const mockDispatcher = {
-      getWorktreeManager: () => ({} as any),
-      getGitHubService: () => ({} as any),
+      getWorktreeManager: () => ({} as unknown as GitWorktreeManager),
+      getGitHubService: () => ({} as unknown as GitHubService),
       getQuotaLockManager: () => undefined,
       isCustomStatusMode: () => false,
     } as unknown as AgentDispatcher;
@@ -147,9 +149,9 @@ describe("BacklogPoller (プロジェクト走査)", () => {
     const mockCleaner = {
       cleanupCompletedIssues: async () => {
         cleanupCalled = true;
-        return { scannedCount: 0, cleanedCount: 0, skippedCount: 0, cleanedIssues: [] };
+        return { scannedCount: 0, cleanedCount: 0, skippedCount: 0, cleanedIssues: [], orphanDockerProjects: [] };
       },
-    } as any;
+    } as unknown as ResourceCleaner;
 
     const poller = new BacklogPoller(
       mockBacklog,

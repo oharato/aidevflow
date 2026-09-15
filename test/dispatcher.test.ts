@@ -166,7 +166,7 @@ APIとUIを結合する。
 
     const dispatcher = new AgentDispatcher(
       mockBacklog,
-      dummyRunner as any,
+      dummyRunner as unknown as IAgentRunner,
       "/mock/repo",
       false,
       undefined,
@@ -238,7 +238,7 @@ APIとUIを結合する。
 
     const dispatcher = new AgentDispatcher(
       mockBacklog,
-      dummyRunner as any,
+      dummyRunner as unknown as IAgentRunner,
       "/mock/repo",
       false,
       undefined,

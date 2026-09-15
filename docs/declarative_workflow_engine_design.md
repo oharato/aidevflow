@@ -7,6 +7,7 @@
 - 🔀 [並行開発 & Git Worktree 仕様書](concurrency_worktree.md)
 - ⚡ [クォータ消費最適化 & 軽量パイプライン仕様書](quota_optimization.md)
 - 🛡️ [トラブルシューティング & エスカレーション仕様書](troubleshooting.md)
+- 🧩 [Issue Tracker (BTS) 抽象化設計書](issue_tracker_abstraction.md)
 
 ---
 
@@ -121,7 +122,7 @@ aidevflow/
 ### 3.2. スキーマ定義 (`WorkflowDefinition`)
 
 ステップ名（キー名）は **完全に可変（ユーザーが自由な識別子を追加可能）** です。
-各ステップに Backlog 連携情報（`backlog_tag`, `custom_status`）を紐付けることで、ステップ名が自由であっても Backlog 側のステータス同期が破綻なく動作します。
+各ステップにチケット連携情報（`step_tag` / `status_name`、および後方互換用の `backlog_tag` / `custom_status`）を紐付けることで、ステップ名が自由であっても BTS 側のステータス同期が破綻なく動作します。
 
 ```yaml
 # workflows/default/workflow.yaml
@@ -134,8 +135,10 @@ steps:
   spec-writer:
     role: spec-writer
     title: "詳細仕様策定"
-    backlog_tag: "[詳細設計中]"
-    custom_status: "詳細設計"
+    step_tag: "[詳細設計中]"
+    status_name: "詳細設計"
+    backlog_tag: "[詳細設計中]" # 後方互換エイリアス
+    custom_status: "詳細設計"   # 後方互換エイリアス
     edit: true
     # instruction を省略した場合:
     # 1. workflows/<PROJECT_KEY>/prompts/spec-writer.md

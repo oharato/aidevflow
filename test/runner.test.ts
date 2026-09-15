@@ -1,16 +1,21 @@
 import { describe, it, expect, vi } from "vitest";
 import { EventEmitter } from "events";
 
+import type { ChildProcess } from "child_process";
+
 let capturedArgs: string[] = [];
 
 vi.mock("child_process", () => ({
   spawn: vi.fn((cmd: string, args: string[]) => {
     capturedArgs = args;
-    const mockChild = new EventEmitter() as any;
-    mockChild.stdout = new EventEmitter();
-    mockChild.stderr = new EventEmitter();
-    mockChild.killed = false;
-    mockChild.kill = vi.fn();
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const mockChild = Object.assign(new EventEmitter(), {
+      stdout,
+      stderr,
+      killed: false,
+      kill: vi.fn(),
+    }) as unknown as ChildProcess;
 
     setTimeout(() => {
       mockChild.stdout.emit(

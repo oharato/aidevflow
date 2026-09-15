@@ -1,8 +1,8 @@
 import { loadConfig } from "./config.js";
-import { BacklogClient } from "./backlog/client.js";
+import { createTracker } from "./tracker/index.js";
 import { AgyRunner, ClaudeCliRunner, MockRunner } from "./agents/runner.js";
 import { AgentDispatcher } from "./daemon/dispatcher.js";
-import { BacklogPoller } from "./daemon/poller.js";
+import { IssuePoller } from "./daemon/poller.js";
 import { JsonlLogger } from "./logger/jsonl.js";
 import { GitWorktreeManager } from "./git/worktree.js";
 import { GitHubService } from "./git/github.js";
@@ -44,20 +44,16 @@ async function main() {
   console.log(`[Logger] JSONLログ出力先: ${logger.getLogFilePath()}`);
   console.log(`[Worktree] ベース作業ディレクトリ: ${config.aidevflowHome}`);
 
-  if (!config.backlogApiKey) {
-    console.error("【エラー】BACKLOG_API_KEY が設定されていません。");
-    console.error(".env ファイルに BACKLOG_API_KEY=xxx を設定してください。");
-    console.error("設定例は .env.example を参照してください。");
-    logger.error("error", "BACKLOG_API_KEY 未設定による起動失敗");
+  let tracker;
+  try {
+    tracker = createTracker(config);
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error(errMsg);
+    logger.error("error", `トラッカー初期化失敗: ${errMsg}`);
     lock.release();
     process.exit(1);
   }
-
-  const backlog = new BacklogClient(
-    config.backlogSpaceId,
-    config.backlogDomain,
-    config.backlogApiKey
-  );
 
   let runner;
   if (config.agentRunner === "mock") {
@@ -96,7 +92,7 @@ async function main() {
   }
 
   const dispatcher = new AgentDispatcher(
-    backlog,
+    tracker,
     runner,
     config.defaultRepoPath || config.agentWorkDir,
     config.dryRun,
@@ -109,8 +105,8 @@ async function main() {
     config.requireHumanSpecApproval
   );
 
-  const poller = new BacklogPoller(
-    backlog,
+  const poller = new IssuePoller(
+    tracker,
     dispatcher,
     config.backlogProjectKey,
     config.backlogIssueKey,

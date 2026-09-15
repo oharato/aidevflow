@@ -47,8 +47,16 @@ export interface WorkflowStep {
   name: string;
   role: AgentRole | string;
   title: string;
-  backlog_tag: string; // 例: "[詳細設計中]"
-  custom_status: string; // 例: "詳細設計"
+  /** ステップ識別プレフィックス/タグ (例: "[詳細設計中]") */
+  tracker_tag?: string;
+  /** プレフィックス用エイリアス (旧 backlog_tag 相当) */
+  step_tag?: string;
+  /** 後方互換用フィールド (旧 backlog_tag) */
+  backlog_tag: string;
+  /** トラッカー/BTS 上のステータス名 (例: "詳細設計") */
+  status_name?: string;
+  /** 後方互換用フィールド (旧 custom_status) */
+  custom_status: string;
   edit: boolean; // true: 編集可, false: 読み取り専用（レビュアー等）
   model?: string;
   effort?: "low" | "medium" | "high";
@@ -76,6 +84,8 @@ export interface StepEvaluationResult {
   isRejection: boolean;
   isEscalation: boolean;
   isHumanGate: boolean;
+  targetStepTag?: string;
+  targetStatusName?: string;
   targetBacklogTag?: string;
   targetCustomStatus?: string;
 }

@@ -10,6 +10,7 @@
 - ⚡ **[クォータ消費最適化 & 軽量パイプライン仕様書](quota_optimization.md)** (Fast/Researchモード・モデル最適化)
 - 🛡️ **[トラブルシューティング & エスカレーション仕様書](troubleshooting.md)** (無限ループ防止・クォータ枯渇・エスカレーション)
 - 🎼 **[宣言的ワークフローエンジン & 権限制御設計書](declarative_workflow_engine_design.md)** (YAML定義・決定キーワード・edit:false多層防御)
+- 🧩 **[Issue Tracker (BTS) 抽象化設計書](issue_tracker_abstraction.md)** (BTS抽象化・BacklogAdapter・MockTracker)
 
 ---
 
@@ -48,6 +49,7 @@ cp .env.example .env
 | `BACKLOG_API_KEY` | ○ | - | Backlog 個人設定から発行した API キー |
 | `BACKLOG_PROJECT_KEY`| ○ | - | 監視対象の Backlog プロジェクトキー（例: `STUDY`） |
 | `BACKLOG_ISSUE_KEY` | - | (未指定) | 特定の1チケットのみを限定監視・デバッグする場合に指定 |
+| `TRACKER_TYPE` | - | `backlog` | 課題管理システム (`backlog` / `mock` / 将来: `github`) |
 | `POLL_INTERVAL_SEC` | - | `10` | Backlog のポーリング監視間隔（秒） |
 | `MAX_CONCURRENCY` | - | `2` | 同時に並行実行する最大チケット数 |
 | `MAX_REJECTION_COUNT`| - | `3` | レビュー差し戻しの最大連続回数（超過で確認待ちへ） |

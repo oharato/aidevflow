@@ -7,6 +7,8 @@ steps:
   spec-writer:
     role: spec-writer
     title: "技術調査・仕様策定"
+    step_tag: "[調査中]"
+    status_name: "詳細設計"
     backlog_tag: "[調査中]"
     custom_status: "詳細設計"
     edit: true
@@ -21,6 +23,8 @@ steps:
   spec-reviewer:
     role: spec-reviewer
     title: "調査・仕様レビュー"
+    step_tag: "[調査レビュー中]"
+    status_name: "設計レビュー"
     backlog_tag: "[調査レビュー中]"
     custom_status: "設計レビュー"
     edit: false

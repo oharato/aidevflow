@@ -1,5 +1,5 @@
 /**
- * Backlog チケットの詳細本文 (description) から対象リポジトリのパス/URL一覧を抽出する
+ * チケット/課題の詳細本文 (description) から対象リポジトリのパス/URL一覧を抽出する
  * 1つのチケットで複数リポジトリが指定されている場合にも対応
  */
 export function extractRepositoryPaths(

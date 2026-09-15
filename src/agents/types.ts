@@ -11,6 +11,7 @@ export interface AgentContext {
   isInvestigation?: boolean;
   isFastMode?: boolean;
   readOnly?: boolean;
+  trackerType?: string;
 }
 
 export interface AgentTokenUsage {

@@ -6,6 +6,9 @@ import { BacklogPoller } from "../src/daemon/poller.js";
 import { JsonlLogger } from "../src/logger/jsonl.js";
 import type { IAgentRunner, AgentRole, AgentResult, QuotaProbeResult } from "../src/agents/types.js";
 import type { BacklogStatus, BacklogIssue, BacklogProject } from "../src/backlog/types.js";
+import type { BacklogClient } from "../src/backlog/client.js";
+import type { IWorktreeManager } from "../src/git/types.js";
+import type { IGitHubService } from "../src/github/types.js";
 
 class MockQuotaRunner implements IAgentRunner {
   private resultHandler: (role: AgentRole) => AgentResult;
@@ -105,11 +108,11 @@ describe("クォータ制限ロック & バックログポーリング休止 & �
     removeWorktree: async () => {},
     commitAndPushChanges: async () => true,
     getCurrentCommitHash: async () => "abcdef1",
-  } as any;
+  } as unknown as IWorktreeManager;
 
   const mockGitHubService = {
     ensurePullRequests: async () => [],
-  } as any;
+  } as unknown as IGitHubService;
 
   beforeEach(() => {
     if (fs.existsSync(testLockPath)) fs.unlinkSync(testLockPath);
@@ -220,7 +223,7 @@ error: Individual quota reached. Please upgrade your subscription. Resets in 2h2
       }));
 
       const dispatcher = new AgentDispatcher(
-        mockBacklog as any,
+        mockBacklog as unknown as BacklogClient,
         runner,
         "/mock/repo",
         false,
@@ -272,7 +275,7 @@ error: Individual quota reached. Please upgrade your subscription. Resets in 2h2
       }));
 
       const dispatcher = new AgentDispatcher(
-        mockBacklog as any,
+        mockBacklog as unknown as BacklogClient,
         runner,
         "/mock/repo",
         false,
@@ -285,7 +288,7 @@ error: Individual quota reached. Please upgrade your subscription. Resets in 2h2
       );
 
       const poller = new BacklogPoller(
-        mockBacklog as any,
+        mockBacklog as unknown as BacklogClient,
         dispatcher,
         "STUDY",
         undefined,
@@ -329,7 +332,7 @@ error: Individual quota reached. Please upgrade your subscription. Resets in 2h2
       runner.setQuotaRecovered(true);
 
       const dispatcher = new AgentDispatcher(
-        mockBacklog as any,
+        mockBacklog as unknown as BacklogClient,
         runner,
         "/mock/repo",
         false,
@@ -342,7 +345,7 @@ error: Individual quota reached. Please upgrade your subscription. Resets in 2h2
       );
 
       const poller = new BacklogPoller(
-        mockBacklog as any,
+        mockBacklog as unknown as BacklogClient,
         dispatcher,
         "STUDY",
         undefined,
